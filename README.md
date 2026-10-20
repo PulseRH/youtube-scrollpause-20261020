@@ -24,6 +24,16 @@ Select **Pause on scroll or minimise** when patching. In YouTube → Settings �
 - A brief pending request handles buffering during the trigger. Requests expire after 1.5 seconds. Pause events are rate limited during a fling.
 - Pause uses the activity's media controller when available, otherwise the same Android pause-only media-key mechanism as upstream's screen-lock pause feature. Casting and interactions with other media apps require device verification.
 
+### Smooth pinch zoom (1.47.1)
+
+Select **Smooth pinch zoom** when patching. **YouTube → Settings → Morphe → Video → Smooth pinch zoom** defaults to on. This replaces the native fullscreen pinch callbacks with continuous centered zoom from 1× through 1.1×, 1.2× and up to 8×. Releasing a pinch keeps its scale. Zoom resets when leaving fullscreen or opening a different video. It does not implement drag-to-pan or the native zoom HUD.
+
+Turn off YouTube's own **Zoom to fill** option for a fitted 1× starting image, then reopen the video. While enabled, this takes priority over Morphe's **Fullscreen video scale** stretch/fill modes and its **Restore pinch to zoom** workaround. **Disable pinch-to-zoom gesture** still takes priority and disables zoom. Turning this custom setting off returns to the upstream handlers; reopen the video after changing it.
+
+The earlier **Pause on scroll or minimise** patch remains in the bundle. Pinch gestures alone do not trigger its scroll observer; an Android view must actually report scrolling.
+
+The new scale model passed 14 standalone checks. Full Android build is pending for this revision, and APK/device verification remains outstanding.
+
 ## Compatibility
 
 Pinned upstream: https://github.com/MorpheApp/morphe-patches/commit/e5464395441e916b643af4e2175c4e253e6df487 (1.47.0).

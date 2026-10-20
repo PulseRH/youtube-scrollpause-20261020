@@ -38,6 +38,43 @@ index 0000000..5a173ba
 +        System.out.println("PASS: " + checks + " pause-policy checks");
 +    }
 +}
+diff --git a/custom-tests/SmoothZoomScaleTest.java b/custom-tests/SmoothZoomScaleTest.java
+new file mode 100644
+index 0000000..abf6e82
+--- /dev/null
++++ b/custom-tests/SmoothZoomScaleTest.java
+@@ -0,0 +1,31 @@
++package app.morphe.extension.youtube.patches;
++
++public final class SmoothZoomScaleTest {
++    private static int checks;
++    private static void expect(float actual, float expected, String name) {
++        checks++;
++        if (Math.abs(actual - expected) > 0.0001f || !Float.isFinite(actual)) {
++            throw new AssertionError(name + ": " + actual + " expected " + expected);
++        }
++    }
++    public static void main(String[] args) {
++        SmoothZoomScale zoom = new SmoothZoomScale();
++        expect(zoom.get(), 1f, "Starts fitted");
++        expect(zoom.update(1.1f), 1.1f, "First outward pinch is 1.1, not screen fill");
++        expect(zoom.update(1.2f / 1.1f), 1.2f, "Continues to 1.2");
++        expect(zoom.update(1f), 1.2f, "Neutral event and gesture release preserve factor");
++        expect(zoom.update(1.1f / 1.2f), 1.1f, "Reverse pinch returns smoothly to 1.1");
++        expect(zoom.update(0.1f), 1f, "Cannot zoom below fit");
++        expect(zoom.update(Float.NaN), 1f, "Ignore NaN");
++        expect(zoom.update(Float.POSITIVE_INFINITY), 1f, "Ignore infinite factor");
++        expect(zoom.update(0f), 1f, "Ignore zero factor");
++        expect(zoom.update(-1f), 1f, "Ignore negative factor");
++        expect(zoom.update(100f), 8f, "Upper safety limit");
++        expect(zoom.update(0.5f), 4f, "Can immediately zoom back from maximum");
++        zoom.reset();
++        expect(zoom.get(), 1f, "New video/fullscreen exit resets zoom");
++        for (int i = 0; i < 10; i++) zoom.update((float) Math.pow(1.1, 0.1));
++        expect(zoom.get(), 1.1f, "Small movement events accumulate without a fill threshold");
++        System.out.println("PASS: " + checks + " smooth zoom checks");
++    }
++}
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java
 new file mode 100644
 index 0000000..1de9cfd
@@ -269,20 +306,261 @@ index 0000000..71bfff0
 +        pendingUntil = 0;
 +    }
 +}
+diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/FullscreenVideoScalePatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/FullscreenVideoScalePatch.java
+index 8941312..9666b5d 100644
+--- a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/FullscreenVideoScalePatch.java
++++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/FullscreenVideoScalePatch.java
+@@ -160,6 +160,12 @@ public class FullscreenVideoScalePatch {
+     private static void applyScaleOnMainThread() {
+         try {
+             View target = resolvePlayerView();
++            if (SmoothZoomPatch.isEnabled()) {
++                detachPreDraw();
++                if (scaledViewRef.get() != null) restoreDefaultTransform(target);
++                SmoothZoomPatch.onPlayerViewLayout(target);
++                return;
++            }
+ 
+             if (!shouldScale() || Settings.FULLSCREEN_VIDEO_SCALE.get() == VideoScaleMode.DEFAULT) {
+                 detachPreDraw();
+diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPatch.java
+new file mode 100644
+index 0000000..22927a6
+--- /dev/null
++++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPatch.java
+@@ -0,0 +1,183 @@
++package app.morphe.extension.youtube.patches;
++
++import android.graphics.Rect;
++import android.view.ScaleGestureDetector;
++import android.view.View;
++import android.view.ViewGroup;
++import android.view.ViewTreeObserver;
++
++import java.lang.ref.WeakReference;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Objects;
++
++import app.morphe.extension.shared.Utils;
++import app.morphe.extension.youtube.settings.Settings;
++import app.morphe.extension.youtube.shared.PlayerType;
++import app.morphe.extension.youtube.shared.ShortsPlayerState;
++import kotlin.Unit;
++
++/** Custom addition, 2026-10-20. See upstream LICENSE and NOTICE. */
++@SuppressWarnings("unused")
++public final class SmoothZoomPatch {
++    private static final SmoothZoomScale zoom = new SmoothZoomScale();
++    private static WeakReference<View> playerRef = new WeakReference<>(null);
++    private static final List<ClipState> clips = new ArrayList<>();
++    private static ViewTreeObserver.OnPreDrawListener preDraw;
++    private static WeakReference<View> preDrawHost = new WeakReference<>(null);
++    private static boolean initialized;
++    private static boolean gesture;
++    private static boolean ownsTransform;
++    private static float originalX, originalY, originalPivotX, originalPivotY;
++    private static String videoId;
++
++    public static boolean isPatchIncluded() { return false; } // Set by patcher.
++
++    public static boolean isEnabled() {
++        return isPatchIncluded() && Settings.SMOOTH_PINCH_ZOOM.get()
++                && !Settings.DISABLE_FULLSCREEN_ZOOM_GESTURE.get();
++    }
++
++    private static boolean fullscreen() {
++        return PlayerType.getCurrent() == PlayerType.WATCH_WHILE_FULLSCREEN
++                && !ShortsPlayerState.isOpen();
++    }
++
++    /** Injection point, also used when handing off from fullscreen stretch/fill. */
++    public static void onPlayerViewLayout(View view) {
++        if (!initialized) {
++            initialized = true;
++            PlayerType.getOnChange().addObserver(type -> {
++                Utils.runOnMainThreadNowOrLater(() -> {
++                    if (!fullscreen()) reset();
++                });
++                return Unit.INSTANCE;
++            });
++        }
++        if (view != null && view != playerRef.get()) {
++            reset();
++            playerRef = new WeakReference<>(view);
++        }
++        apply();
++    }
++
++    public static boolean onScaleBegin(ScaleGestureDetector detector) {
++        View player = playerRef.get();
++        gesture = detector != null && fullscreen() && player != null
++                && player.isAttachedToWindow() && player.getWidth() > 0;
++        return gesture;
++    }
++
++    public static boolean onScale(ScaleGestureDetector detector) {
++        if (!gesture || detector == null || !fullscreen()) return false;
++        zoom.update(detector.getScaleFactor());
++        apply();
++        return true;
++    }
++
++    public static void onScaleEnd(ScaleGestureDetector detector) {
++        gesture = false;
++        apply(); // Keep the exact factor; no fit/fill snap on release.
++    }
++
++    public static void onVideoChanged(String id) {
++        Utils.runOnMainThreadNowOrLater(() -> {
++            if (!Objects.equals(videoId, id)) {
++                videoId = id;
++                reset();
++            }
++        });
++    }
++
++    private static void apply() {
++        View player = playerRef.get();
++        if (!isEnabled() || !fullscreen() || player == null || !player.isAttachedToWindow()) {
++            reset();
++            return;
++        }
++        if (zoom.get() == 1f) {
++            restore();
++            return;
++        }
++        if (!ownsTransform) {
++            ownsTransform = true;
++            originalX = player.getScaleX();
++            originalY = player.getScaleY();
++            originalPivotX = player.getPivotX();
++            originalPivotY = player.getPivotY();
++            for (View current = player; current != null;) {
++                clips.add(new ClipState(current));
++                if (!(current.getParent() instanceof View parent)) break;
++                current = parent;
++            }
++            preDraw = () -> { apply(); return true; };
++            player.getViewTreeObserver().addOnPreDrawListener(preDraw);
++            preDrawHost = new WeakReference<>(player);
++        }
++        for (ClipState state : clips) state.unclip();
++        player.setPivotX(player.getWidth() / 2f);
++        player.setPivotY(player.getHeight() / 2f);
++        // Scale only the player view. Scaling its surface too would square the factor.
++        player.setScaleX(originalX * zoom.get());
++        player.setScaleY(originalY * zoom.get());
++    }
++
++    private static void reset() {
++        gesture = false;
++        zoom.reset();
++        restore();
++    }
++
++    private static void restore() {
++        View host = preDrawHost.get();
++        if (preDraw != null && host != null && host.getViewTreeObserver().isAlive()) {
++            host.getViewTreeObserver().removeOnPreDrawListener(preDraw);
++        }
++        preDraw = null;
++        preDrawHost.clear();
++        View player = playerRef.get();
++        if (ownsTransform && player != null) {
++            player.setScaleX(originalX);
++            player.setScaleY(originalY);
++            player.setPivotX(originalPivotX);
++            player.setPivotY(originalPivotY);
++        }
++        ownsTransform = false;
++        for (ClipState state : clips) state.restore();
++        clips.clear();
++    }
++
++    private static final class ClipState {
++        final WeakReference<View> ref;
++        final Rect bounds;
++        final boolean outline, children, padding;
++        ClipState(View view) {
++            ref = new WeakReference<>(view);
++            Rect clip = view.getClipBounds();
++            bounds = clip == null ? null : new Rect(clip);
++            outline = view.getClipToOutline();
++            children = view instanceof ViewGroup group && group.getClipChildren();
++            padding = view instanceof ViewGroup group && group.getClipToPadding();
++        }
++        void unclip() {
++            View view = ref.get();
++            if (view == null) return;
++            view.setClipBounds(null);
++            view.setClipToOutline(false);
++            if (view instanceof ViewGroup group) {
++                group.setClipChildren(false);
++                group.setClipToPadding(false);
++            }
++        }
++        void restore() {
++            View view = ref.get();
++            if (view == null) return;
++            view.setClipBounds(bounds);
++            view.setClipToOutline(outline);
++            if (view instanceof ViewGroup group) {
++                group.setClipChildren(children);
++                group.setClipToPadding(padding);
++            }
++        }
++    }
++}
+diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomScale.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomScale.java
+new file mode 100644
+index 0000000..94d9b9a
+--- /dev/null
++++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomScale.java
+@@ -0,0 +1,17 @@
++package app.morphe.extension.youtube.patches;
++
++/** Continuous zoom relative to fit, independent of the display/video aspect ratios. */
++final class SmoothZoomScale {
++    private float scale = 1f;
++
++    float get() { return scale; }
++
++    float update(float factor) {
++        if (Float.isFinite(factor) && factor > 0f) {
++            scale = Math.max(1f, Math.min(8f, scale * factor));
++        }
++        return scale;
++    }
++
++    void reset() { scale = 1f; }
++}
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java
-index 6f307b9..a956c52 100644
+index 6f307b9..6eacf6e 100644
 --- a/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java
 +++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java
-@@ -83,6 +83,9 @@ import app.morphe.extension.youtube.videoplayer.PlayAllButton.PlaylistIDPrefix;
+@@ -83,6 +83,11 @@ import app.morphe.extension.youtube.videoplayer.PlayAllButton.PlaylistIDPrefix;
  import app.morphe.extension.youtube.videoplayer.PlayerIcons;
  
  public class Settings extends SharedYouTubeSettings {
 +    public static final BooleanSetting PAUSE_ON_SCROLL = new BooleanSetting("morphe_pause_on_scroll", TRUE);
 +    public static final BooleanSetting PAUSE_ON_MINIMISE = new BooleanSetting("morphe_pause_on_minimise", TRUE);
 +
++    public static final BooleanSetting SMOOTH_PINCH_ZOOM = new BooleanSetting("morphe_smooth_pinch_zoom", TRUE);
++
      // Video
      public static final EnumSetting<PlaybackBufferSize> PLAYBACK_BUFFER_SIZE = new EnumSetting<>(
              "morphe_playback_buffer_size", PlaybackBufferSize.DEFAULT, true);
+diff --git a/gradle.properties b/gradle.properties
+index 2a3d7ca..64953f2 100644
+--- a/gradle.properties
++++ b/gradle.properties
+@@ -3,4 +3,4 @@ org.gradle.jvmargs = -Xms512M -Xmx2048M
+ org.gradle.parallel = true
+ android.useAndroidX = true
+ kotlin.code.style = official
+-version = 1.47.0
++version = 1.47.1
 diff --git a/patches/build.gradle.kts b/patches/build.gradle.kts
 index 831d7ff..a989a26 100644
 --- a/patches/build.gradle.kts
@@ -376,11 +654,74 @@ index 0000000..77cca38
 +        }
 +    }
 +}
+diff --git a/patches/src/main/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomPatch.kt b/patches/src/main/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomPatch.kt
+new file mode 100644
+index 0000000..9844201
+--- /dev/null
++++ b/patches/src/main/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomPatch.kt
+@@ -0,0 +1,57 @@
++package app.morphe.patches.youtube.layout.player.fullscreen
++
++import app.morphe.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
++import app.morphe.patcher.patch.bytecodePatch
++import app.morphe.patches.all.misc.resources.addResourcesPatch
++import app.morphe.patches.shared.misc.settings.preference.SwitchPreference
++import app.morphe.patches.youtube.misc.settings.PreferenceScreen
++import app.morphe.patches.youtube.shared.Constants.COMPATIBILITY_YOUTUBE
++import app.morphe.patches.youtube.video.videoid.hookVideoId
++import app.morphe.patches.youtube.video.videoid.videoIdPatch
++import app.morphe.util.addInstructionsAtControlFlowLabel
++import app.morphe.util.findFreeRegister
++import app.morphe.util.setExtensionIsPatchIncluded
++
++private const val SMOOTH_ZOOM = "Lapp/morphe/extension/youtube/patches/SmoothZoomPatch;"
++
++@Suppress("unused")
++val smoothZoomPatch = bytecodePatch(
++    name = "Smooth pinch zoom",
++    description = "Replaces snap-to-fill with continuous fullscreen zoom from 1x to 8x.",
++) {
++    compatibleWith(COMPATIBILITY_YOUTUBE)
++    dependsOn(disableFullscreenGesturesPatch, fullscreenVideoScalePatch, videoIdPatch, addResourcesPatch)
++
++    execute {
++        setExtensionIsPatchIncluded(SMOOTH_ZOOM)
++        PreferenceScreen.VIDEO.addPreferences(SwitchPreference("morphe_smooth_pinch_zoom", summary = true))
++        hookVideoId("$SMOOTH_ZOOM->onVideoChanged(Ljava/lang/String;)V")
++        YouTubePlayerViewOnLayoutFingerprint.let {
++            it.method.addInstructionsAtControlFlowLabel(
++                it.instructionMatches.first().index,
++                "invoke-static { p0 }, $SMOOTH_ZOOM->onPlayerViewLayout(Landroid/view/View;)V"
++            )
++        }
++        // These guards precede the upstream/native handlers, so there is one scale owner.
++        for (name in listOf("onScaleBegin", "onScale", "onScaleEnd")) {
++            val method = VideoZoomScaleBeginFingerprint.classDef.methods.single {
++                it.name == name && it.parameterTypes == listOf("Landroid/view/ScaleGestureDetector;")
++            }
++            val count = method.implementation!!.registerCount
++            val scratch = method.findFreeRegister(0, count - 2, count - 1)
++            val result = if (name == "onScaleEnd") {
++                "invoke-static/range { p1 .. p1 }, $SMOOTH_ZOOM->$name(Landroid/view/ScaleGestureDetector;)V\nreturn-void"
++            } else {
++                "invoke-static/range { p1 .. p1 }, $SMOOTH_ZOOM->$name(Landroid/view/ScaleGestureDetector;)Z\nmove-result v$scratch\nreturn v$scratch"
++            }
++            method.addInstructionsWithLabels(0, """
++                invoke-static { }, $SMOOTH_ZOOM->isEnabled()Z
++                move-result v$scratch
++                if-eqz v$scratch, :native_zoom
++                $result
++                :native_zoom
++                nop
++            """)
++        }
++    }
++}
 diff --git a/patches/src/main/resources/addresources/values/youtube/strings.xml b/patches/src/main/resources/addresources/values/youtube/strings.xml
-index d64eb6c..9aa423e 100644
+index d64eb6c..e540d1c 100644
 --- a/patches/src/main/resources/addresources/values/youtube/strings.xml
 +++ b/patches/src/main/resources/addresources/values/youtube/strings.xml
-@@ -1498,4 +1498,8 @@ Limitation: Reverts to old style \'More videos\' overlay"</string>
+@@ -1498,4 +1498,10 @@ Limitation: Reverts to old style \'More videos\' overlay"</string>
      <string name="morphe_player_icon_style_entry_sharp" translatable="false">Sharp</string>
      <string name="morphe_player_icon_style_entry_custom">Custom</string>
      <string name="morphe_shorts_icon_style_title">Shorts icon style</string>
@@ -388,4 +729,6 @@ index d64eb6c..9aa423e 100644
 +    <string name="morphe_pause_on_scroll_summary">Pause regular videos when you scroll, even while the video remains visible. Resume playback manually.</string>
 +    <string name="morphe_pause_on_minimise_title">Pause when minimised</string>
 +    <string name="morphe_pause_on_minimise_summary">Pause regular videos on entering the mini-player, picture-in-picture, or the background. Resume playback manually.</string>
++    <string name="morphe_smooth_pinch_zoom_title">Smooth pinch zoom</string>
++    <string name="morphe_smooth_pinch_zoom_summary">Zoom continuously from 1x to 8x without snapping to fill. Overrides fullscreen stretch and fill while enabled. Disable YouTube zoom to fill for a fitted starting image. Restart the video after changing this setting.</string>
  </resources>
