@@ -1,3 +1,29 @@
+# [1.47.6](https://github.com/PulseRH/youtube-scrollpause-20261020/releases/tag/v1.47.6-scrollpause.1) (2026-10-20)
+
+Makes ScrollPause a focused source with exactly two selectable patches:
+
+- **Pause on scroll or minimise**
+- **Smooth pinch zoom**
+
+Required settings, gestures, extension hooks, and normal non-root GmsCore/playback support are automatic hidden dependencies. Unrelated official patches are no longer selectable. Ad blocking, SponsorBlock, and the complete official feature set are not part of this focused bundle.
+
+The importable bundle is 8,208,688 bytes, about 29% smaller than 1.47.5 (11,539,653 bytes). 1,078 unused archive entries, including unrelated patch classes and Music/Reddit extension payloads, are removed. Complete reachable classes are retained conservatively, including class references in descriptors and reflection strings. The build checks the resulting archive with Morphe's patch loader, using no untrimmed main classes on its classpath, and requires exactly the two custom entries plus their 45 hidden dependency objects.
+
+The behaviour from 1.47.5 remains: immediate pause on confirmed held list scrolling with resize protections, pause on minimise, optional resume after scrolling **off by default**, continuous pinch zoom, brief zoom percentage, and bounded panning.
+
+## Update
+
+Refresh your existing ScrollPause source to **1.47.6** and repatch an original supported **YouTube 21.20.405** APK. Select either or both custom patches. This bundle is intended for a normal non-root install using GmsCore; it automatically includes that support. Updating the source alone does not change the installed YouTube app.
+
+Use this source as the selected patch bundle. Combining it with the full official bundle has not been validated and could duplicate shared hooks.
+
+## Validation
+
+The full Android build, 73 standalone policy/geometry checks, five bytecode wrapper tests, and compact-bundle loading verification passed. Build: https://github.com/PulseRH/youtube-scrollpause-20261020/actions/runs/39484362481 . Real YouTube APK patching and phone gesture behaviour still require confirmation.
+
+Unofficial derivative of Morphe Patches 1.47.0. Pinned upstream revision, complete source changes, reproducible build/test workflow, GPLv3 licence and Section 7 notices are included. No YouTube APK is included.
+
+
 # [1.47.5](https://github.com/PulseRH/youtube-scrollpause-20261020/releases/tag/v1.47.5-scrollpause.1) (2026-10-20)
 
 Improves **Pause on scroll or minimise** so confirmed list scrolling can pause a video while the finger is still down, without removing the player-resize protections.

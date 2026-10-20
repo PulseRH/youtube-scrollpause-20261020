@@ -13,4 +13,4 @@ if ($LASTEXITCODE) { throw 'Patch check failed' }
 git -C $target apply (Join-Path $PSScriptRoot 'scrollpause.patch')
 if ($LASTEXITCODE) { throw 'Applying patch failed' }
 Write-Output "Prepared source: $target"
-Write-Output 'Build with Java 21, Android SDK, and authenticated GitHub package access: .\gradlew.bat :patches:buildAndroid'
+Write-Output 'Build with Java 21, Python 3 (python3), Android SDK, and authenticated GitHub package access: .\gradlew.bat :patches:buildAndroid'
