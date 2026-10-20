@@ -150,6 +150,61 @@ index 0000000..7890fe7
 +        System.out.println("PASS: " + checks + " scroll resume checks");
 +    }
 +}
+diff --git a/custom-tests/SmoothZoomPanTest.java b/custom-tests/SmoothZoomPanTest.java
+new file mode 100644
+index 0000000..ef4bf54
+--- /dev/null
++++ b/custom-tests/SmoothZoomPanTest.java
+@@ -0,0 +1,49 @@
++package app.morphe.extension.youtube.patches;
++
++public final class SmoothZoomPanTest {
++    private static int checks;
++    private static void expect(float actual, float expected, String label) {
++        checks++;
++        if (!Float.isFinite(actual) || Math.abs(actual - expected) > .01f) {
++            throw new AssertionError(label + ": " + actual + " expected " + expected);
++        }
++    }
++    public static void main(String[] args) {
++        SmoothZoomPan pan = new SmoothZoomPan();
++        pan.drag(500, -500);
++        pan.constrain(500, 250, 1000, 500, 0, 0, 1000, 500);
++        expect(pan.x(), 0, "No horizontal panning at fit");
++        expect(pan.y(), 0, "No vertical panning at fit");
++        pan.drag(500, -500);
++        pan.constrain(500, 250, 1100, 550, 0, 0, 1000, 500);
++        expect(pan.x(), 50, "1.1x horizontal crop boundary");
++        expect(pan.y(), -25, "1.1x vertical crop boundary");
++        pan.drag(-1000, 1000);
++        pan.constrain(500, 250, 1100, 550, 0, 0, 1000, 500);
++        expect(pan.x(), -50, "Opposite horizontal boundary");
++        expect(pan.y(), 25, "Opposite vertical boundary");
++        pan.reset();
++        pan.drag(20, 15);
++        pan.constrain(500, 250, 2000, 1000, 0, 0, 1000, 500);
++        expect(pan.x(), 20, "Drag follows finger horizontally");
++        expect(pan.y(), 15, "Drag follows finger vertically");
++        // 16:9 content on a wider display: bars do not become pannable picture.
++        pan.drag(1000, 1000);
++        pan.constrain(1200, 540, 2112, 1188, 0, 0, 2400, 1080);
++        expect(pan.x(), 0, "No panning into pillarbox space");
++        expect(pan.y(), 54, "Only the genuinely cropped axis moves");
++        pan.constrain(1200, 540, 1920, 1080, 0, 0, 2400, 1080);
++        expect(pan.y(), 0, "Zooming out recentres the uncropped axis");
++        pan.reset();
++        pan.drag(Float.NaN, 10);
++        expect(pan.x(), 0, "Reject invalid touch coordinate");
++        pan.drag(10000, 10000);
++        pan.constrain(600, 350, 1400, 700, 100, 100, 1000, 500);
++        expect(pan.x(), 200, "Viewport offset horizontal boundary");
++        expect(pan.y(), 100, "Viewport offset vertical boundary");
++        pan.reset();
++        expect(pan.x(), 0, "New video resets horizontal offset");
++        expect(pan.y(), 0, "New video resets vertical offset");
++        System.out.println("PASS: " + checks + " crop/pan checks");
++    }
++}
 diff --git a/custom-tests/SmoothZoomScaleTest.java b/custom-tests/SmoothZoomScaleTest.java
 new file mode 100644
 index 0000000..abf6e82
@@ -189,10 +244,10 @@ index 0000000..abf6e82
 +}
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java
 new file mode 100644
-index 0000000..885a60f
+index 0000000..dda2a04
 --- /dev/null
 +++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java
-@@ -0,0 +1,284 @@
+@@ -0,0 +1,293 @@
 +package app.morphe.extension.youtube.patches;
 +
 +import android.app.Activity;
@@ -237,6 +292,15 @@ index 0000000..885a60f
 +    private static boolean resumeCheckScheduled;
 +    private static boolean touchMoved;
 +    private static String videoId;
++
++    /** A player pan must not leave a half-observed scroll/resume gesture armed. */
++    public static void onPlayerPan() {
++        if (!registered) return;
++        touching = false;
++        scrollGesture.block(SystemClock.uptimeMillis());
++        scrollPolicy.cancel();
++        resumePolicy.cancel();
++    }
 +
 +    /** Injection point. Observes a gesture; never consumes or changes a touch event. */
 +    public static void onTouchEvent(MotionEvent event) {
@@ -513,7 +577,7 @@ index 0000000..71bfff0
 +    }
 +}
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/FullscreenVideoScalePatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/FullscreenVideoScalePatch.java
-index 8941312..9666b5d 100644
+index 8941312..f008936 100644
 --- a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/FullscreenVideoScalePatch.java
 +++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/FullscreenVideoScalePatch.java
 @@ -160,6 +160,12 @@ public class FullscreenVideoScalePatch {
@@ -529,6 +593,17 @@ index 8941312..9666b5d 100644
  
              if (!shouldScale() || Settings.FULLSCREEN_VIDEO_SCALE.get() == VideoScaleMode.DEFAULT) {
                  detachPreDraw();
+@@ -266,6 +272,10 @@ public class FullscreenVideoScalePatch {
+         view.setTranslationY(-(loc[1] + contentTop));
+     }
+ 
++    public static float smoothZoomContentAspect(View view) {
++        return getVideoAspectRatio(view, view.getWidth(), view.getHeight());
++    }
++
+     private static float getVideoAspectRatio(View view, int viewW, int viewH) {
+         View child = findDirectVideoSurface(view);
+         if (child != null && child != view && child.getWidth() > 8 && child.getHeight() > 8) {
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollPauseGesture.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollPauseGesture.java
 new file mode 100644
 index 0000000..ff15c9c
@@ -604,24 +679,65 @@ index 0000000..00e87e4
 +        return true;
 +    }
 +}
+diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPan.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPan.java
+new file mode 100644
+index 0000000..f59396d
+--- /dev/null
++++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPan.java
+@@ -0,0 +1,26 @@
++package app.morphe.extension.youtube.patches;
++
++/** Screen-pixel offsets, constrained by the cropped video content, not its black bars. */
++final class SmoothZoomPan {
++    private float x, y;
++    private boolean cropped;
++    float x() { return x; }
++    float y() { return y; }
++    boolean cropped() { return cropped; }
++    void reset() { x = y = 0; cropped = false; }
++    void drag(float dx, float dy) {
++        if (Float.isFinite(dx) && Float.isFinite(dy)) { x += dx; y += dy; }
++    }
++    void constrain(float centerX, float centerY, float contentW, float contentH,
++                   float left, float top, float width, float height) {
++        cropped = contentW > width || contentH > height;
++        x = constrainAxis(x, centerX, contentW, left, width);
++        y = constrainAxis(y, centerY, contentH, top, height);
++    }
++    private static float constrainAxis(float value, float center, float content, float start, float viewport) {
++        if (content <= viewport || viewport <= 0) return 0;
++        float min = start + viewport - (center + content / 2f);
++        float max = start - (center - content / 2f);
++        return Math.max(min, Math.min(max, value));
++    }
++}
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPatch.java
 new file mode 100644
-index 0000000..22927a6
+index 0000000..ea7c3f0
 --- /dev/null
 +++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPatch.java
-@@ -0,0 +1,183 @@
+@@ -0,0 +1,335 @@
 +package app.morphe.extension.youtube.patches;
 +
 +import android.graphics.Rect;
++import android.app.Activity;
++import android.graphics.Color;
++import android.graphics.drawable.GradientDrawable;
++import android.os.Handler;
++import android.os.Looper;
++import android.view.MotionEvent;
 +import android.view.ScaleGestureDetector;
 +import android.view.View;
 +import android.view.ViewGroup;
 +import android.view.ViewTreeObserver;
++import android.view.ViewConfiguration;
++import android.widget.TextView;
 +
 +import java.lang.ref.WeakReference;
 +import java.util.ArrayList;
 +import java.util.List;
 +import java.util.Objects;
++import java.util.Locale;
 +
 +import app.morphe.extension.shared.Utils;
 +import app.morphe.extension.youtube.settings.Settings;
@@ -633,6 +749,7 @@ index 0000000..22927a6
 +@SuppressWarnings("unused")
 +public final class SmoothZoomPatch {
 +    private static final SmoothZoomScale zoom = new SmoothZoomScale();
++    private static final SmoothZoomPan pan = new SmoothZoomPan();
 +    private static WeakReference<View> playerRef = new WeakReference<>(null);
 +    private static final List<ClipState> clips = new ArrayList<>();
 +    private static ViewTreeObserver.OnPreDrawListener preDraw;
@@ -641,7 +758,15 @@ index 0000000..22927a6
 +    private static boolean gesture;
 +    private static boolean ownsTransform;
 +    private static float originalX, originalY, originalPivotX, originalPivotY;
++    private static float originalTranslationX, originalTranslationY;
 +    private static String videoId;
++    private static boolean panCandidate, panning;
++    private static float downX, downY, lastX, lastY;
++    private static int panPointer;
++    private static final Handler hudHandler = new Handler(Looper.getMainLooper());
++    private static TextView hud;
++    private static WeakReference<ViewGroup> hudHost = new WeakReference<>(null);
++    private static final Runnable HIDE_HUD = SmoothZoomPatch::hideHud;
 +
 +    public static boolean isPatchIncluded() { return false; } // Set by patcher.
 +
@@ -677,6 +802,7 @@ index 0000000..22927a6
 +        View player = playerRef.get();
 +        gesture = detector != null && fullscreen() && player != null
 +                && player.isAttachedToWindow() && player.getWidth() > 0;
++        if (gesture) showHud();
 +        return gesture;
 +    }
 +
@@ -684,12 +810,123 @@ index 0000000..22927a6
 +        if (!gesture || detector == null || !fullscreen()) return false;
 +        zoom.update(detector.getScaleFactor());
 +        apply();
++        showHud();
 +        return true;
 +    }
 +
 +    public static void onScaleEnd(ScaleGestureDetector detector) {
 +        gesture = false;
 +        apply(); // Keep the exact factor; no fit/fill snap on release.
++        if (fullscreen() && isEnabled()) showHud();
++    }
++
++    /** Activity touch hook. Consume actual pan drags; taps and multi-touch reach YouTube. */
++    public static boolean onTouchEvent(Activity activity, MotionEvent event) {
++        if (event == null || !isEnabled() || !fullscreen() || zoom.get() <= 1f) {
++            panCandidate = panning = false;
++            return false;
++        }
++        int action = event.getActionMasked();
++        if (action == MotionEvent.ACTION_DOWN) {
++            panPointer = event.getPointerId(0);
++            downX = lastX = event.getRawX();
++            downY = lastY = event.getRawY();
++            View player = playerRef.get();
++            Rect visible = new Rect();
++            // Leave the bottom controls/seekbar available to the normal player.
++            float margin = 64 * activity.getResources().getDisplayMetrics().density;
++            panCandidate = pan.cropped() && player != null && player.getGlobalVisibleRect(visible)
++                    && visible.contains((int) downX, (int) downY)
++                    && downY < activity.getWindow().getDecorView().getHeight() - margin;
++            panning = false;
++        } else if (action == MotionEvent.ACTION_POINTER_DOWN) {
++            if (panning) {
++                // A pan cancelled the view's original stream. Re-seed it before handing
++                // the new two-finger gesture back to YouTube's ScaleGestureDetector.
++                MotionEvent down = MotionEvent.obtain(event.getDownTime(), event.getEventTime(),
++                        MotionEvent.ACTION_DOWN, event.getX(0), event.getY(0), event.getMetaState());
++                activity.getWindow().superDispatchTouchEvent(down);
++                down.recycle();
++            }
++            panCandidate = panning = false;
++        } else if (action == MotionEvent.ACTION_POINTER_UP) {
++            if (event.getPointerCount() == 2) {
++                int remaining = event.getActionIndex() == 0 ? 1 : 0;
++                panPointer = event.getPointerId(remaining);
++                downX = lastX = rawX(event, remaining);
++                downY = lastY = rawY(event, remaining);
++                panCandidate = pan.cropped();
++                panning = false;
++            }
++        } else if (action == MotionEvent.ACTION_MOVE && event.getPointerCount() == 1 && panCandidate) {
++            int index = event.findPointerIndex(panPointer);
++            if (index < 0) return false;
++            float x = rawX(event, index), y = rawY(event, index);
++            int slop = ViewConfiguration.get(activity).getScaledTouchSlop();
++            if (!panning && Math.hypot(x - downX, y - downY) > slop) {
++                MotionEvent cancel = MotionEvent.obtain(event);
++                cancel.setAction(MotionEvent.ACTION_CANCEL);
++                activity.getWindow().superDispatchTouchEvent(cancel);
++                cancel.recycle();
++                panning = true;
++                AutoPausePatch.onPlayerPan();
++            }
++            if (panning) {
++                pan.drag(x - lastX, y - lastY);
++                lastX = x;
++                lastY = y;
++                apply();
++                showHud();
++                return true;
++            }
++        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
++            boolean consumed = panning;
++            panCandidate = panning = false;
++            if (consumed) showHud();
++            return consumed;
++        }
++        return false;
++    }
++
++    private static float rawX(MotionEvent e, int i) { return e.getX(i) + e.getRawX() - e.getX(); }
++    private static float rawY(MotionEvent e, int i) { return e.getY(i) + e.getRawY() - e.getY(); }
++
++    private static void showHud() {
++        Activity activity = Utils.getActivity();
++        if (activity == null || !(activity.getWindow().getDecorView() instanceof ViewGroup root)) return;
++        if (hud == null || hudHost.get() != root) {
++            hideHud();
++            hud = new TextView(activity);
++            float density = activity.getResources().getDisplayMetrics().density;
++            hud.setTextColor(Color.WHITE);
++            hud.setTextSize(16);
++            hud.setPadding((int) (12 * density), (int) (7 * density), (int) (12 * density), (int) (7 * density));
++            GradientDrawable background = new GradientDrawable();
++            background.setColor(0xBB000000);
++            background.setCornerRadius(10 * density);
++            hud.setBackground(background);
++            hud.setClickable(false);
++            hud.setFocusable(false);
++            hud.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
++            root.getOverlay().add(hud);
++            hudHost = new WeakReference<>(root);
++        }
++        hud.setText(String.format(Locale.getDefault(), "%.1f× · %.0f%%", zoom.get(), zoom.get() * 100));
++        hud.measure(View.MeasureSpec.makeMeasureSpec(root.getWidth(), View.MeasureSpec.AT_MOST),
++                View.MeasureSpec.makeMeasureSpec(root.getHeight(), View.MeasureSpec.AT_MOST));
++        int x = (root.getWidth() - hud.getMeasuredWidth()) / 2;
++        int y = (int) (40 * activity.getResources().getDisplayMetrics().density);
++        hud.layout(x, y, x + hud.getMeasuredWidth(), y + hud.getMeasuredHeight());
++        hudHandler.removeCallbacks(HIDE_HUD);
++        hudHandler.postDelayed(HIDE_HUD, 900);
++    }
++
++    private static void hideHud() {
++        hudHandler.removeCallbacks(HIDE_HUD);
++        ViewGroup host = hudHost.get();
++        if (hud != null && host != null) host.getOverlay().remove(hud);
++        hud = null;
++        hudHost.clear();
 +    }
 +
 +    public static void onVideoChanged(String id) {
@@ -717,6 +954,8 @@ index 0000000..22927a6
 +            originalY = player.getScaleY();
 +            originalPivotX = player.getPivotX();
 +            originalPivotY = player.getPivotY();
++            originalTranslationX = player.getTranslationX();
++            originalTranslationY = player.getTranslationY();
 +            for (View current = player; current != null;) {
 +                clips.add(new ClipState(current));
 +                if (!(current.getParent() instanceof View parent)) break;
@@ -732,11 +971,28 @@ index 0000000..22927a6
 +        // Scale only the player view. Scaling its surface too would square the factor.
 +        player.setScaleX(originalX * zoom.get());
 +        player.setScaleY(originalY * zoom.get());
++        int[] location = new int[2], viewport = new int[2];
++        player.getLocationOnScreen(location);
++        View root = player.getRootView();
++        root.getLocationOnScreen(viewport);
++        float aspect = FullscreenVideoScalePatch.smoothZoomContentAspect(player);
++        float contentW = Math.min(player.getWidth(), player.getHeight() * aspect);
++        float contentH = Math.min(player.getHeight(), player.getWidth() / aspect);
++        float centerX = location[0] + player.getWidth() * player.getScaleX() / 2f
++                - (player.getTranslationX() - originalTranslationX);
++        float centerY = location[1] + player.getHeight() * player.getScaleY() / 2f
++                - (player.getTranslationY() - originalTranslationY);
++        pan.constrain(centerX, centerY, contentW * player.getScaleX(), contentH * player.getScaleY(),
++                viewport[0], viewport[1], root.getWidth(), root.getHeight());
++        player.setTranslationX(originalTranslationX + pan.x());
++        player.setTranslationY(originalTranslationY + pan.y());
 +    }
 +
 +    private static void reset() {
 +        gesture = false;
 +        zoom.reset();
++        panCandidate = panning = false;
++        hideHud();
 +        restore();
 +    }
 +
@@ -753,7 +1009,10 @@ index 0000000..22927a6
 +            player.setScaleY(originalY);
 +            player.setPivotX(originalPivotX);
 +            player.setPivotY(originalPivotY);
++            player.setTranslationX(originalTranslationX);
++            player.setTranslationY(originalTranslationY);
 +        }
++        pan.reset();
 +        ownsTransform = false;
 +        for (ClipState state : clips) state.restore();
 +        clips.clear();
@@ -835,7 +1094,7 @@ index 6f307b9..b5b608b 100644
      public static final EnumSetting<PlaybackBufferSize> PLAYBACK_BUFFER_SIZE = new EnumSetting<>(
              "morphe_playback_buffer_size", PlaybackBufferSize.DEFAULT, true);
 diff --git a/gradle.properties b/gradle.properties
-index 2a3d7ca..5bd82ab 100644
+index 2a3d7ca..bfe32b1 100644
 --- a/gradle.properties
 +++ b/gradle.properties
 @@ -3,4 +3,4 @@ org.gradle.jvmargs = -Xms512M -Xmx2048M
@@ -843,7 +1102,7 @@ index 2a3d7ca..5bd82ab 100644
  android.useAndroidX = true
  kotlin.code.style = official
 -version = 1.47.0
-+version = 1.47.3
++version = 1.47.4
 diff --git a/patches/build.gradle.kts b/patches/build.gradle.kts
 index 831d7ff..a989a26 100644
 --- a/patches/build.gradle.kts
@@ -943,10 +1202,10 @@ index 0000000..a04232a
 +}
 diff --git a/patches/src/main/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomPatch.kt b/patches/src/main/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomPatch.kt
 new file mode 100644
-index 0000000..559ecb5
+index 0000000..bf9a4c2
 --- /dev/null
 +++ b/patches/src/main/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomPatch.kt
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,112 @@
 +package app.morphe.patches.youtube.layout.player.fullscreen
 +
 +import app.morphe.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
@@ -957,20 +1216,23 @@ index 0000000..559ecb5
 +import app.morphe.patches.shared.misc.settings.preference.SwitchPreference
 +import app.morphe.patches.youtube.misc.settings.PreferenceScreen
 +import app.morphe.patches.youtube.shared.Constants.COMPATIBILITY_YOUTUBE
++import app.morphe.patches.youtube.shared.YouTubeActivityOnCreateFingerprint
 +import app.morphe.patches.youtube.video.videoid.hookVideoId
 +import app.morphe.patches.youtube.video.videoid.videoIdPatch
 +import app.morphe.util.addInstructionsAtControlFlowLabel
 +import app.morphe.util.cloneMutable
 +import app.morphe.util.setExtensionIsPatchIncluded
 +import com.android.tools.smali.dexlib2.builder.MutableMethodImplementation
++import com.android.tools.smali.dexlib2.AccessFlags
 +import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
++import com.android.tools.smali.dexlib2.immutable.ImmutableMethodParameter
 +
 +private const val SMOOTH_ZOOM = "Lapp/morphe/extension/youtube/patches/SmoothZoomPatch;"
 +
 +@Suppress("unused")
 +val smoothZoomPatch = bytecodePatch(
 +    name = "Smooth pinch zoom",
-+    description = "Replaces snap-to-fill with continuous fullscreen zoom from 1x to 8x.",
++    description = "Continuous fullscreen zoom from 1x to 8x with a brief percentage display and drag-to-pan, without snap-to-fill.",
 +) {
 +    compatibleWith(COMPATIBILITY_YOUTUBE)
 +    dependsOn(disableFullscreenGesturesPatch, fullscreenVideoScalePatch, videoIdPatch, addResourcesPatch)
@@ -997,6 +1259,40 @@ index 0000000..559ecb5
 +                add(wrapper)
 +            }
 +        }
++        val activity = YouTubeActivityOnCreateFingerprint.classDef
++        val touch = activity.methods.firstOrNull {
++            it.name == "dispatchTouchEvent" && it.returnType == "Z" &&
++                it.parameterTypes == listOf("Landroid/view/MotionEvent;")
++        }
++        if (touch != null) {
++            val native = touch.cloneMutable(name = "scrollPauseNative_dispatchTouchEvent")
++            val wrapper = smoothZoomTouchWrapper(activity.type, touch.accessFlags,
++                "invoke-virtual { p0, p1 }, ${activity.type}->${native.name}(Landroid/view/MotionEvent;)Z")
++            activity.methods.remove(touch)
++            activity.methods.add(native)
++            activity.methods.add(wrapper)
++        } else {
++            activity.methods.add(smoothZoomTouchWrapper(activity.type, AccessFlags.PUBLIC.value,
++                "invoke-super { p0, p1 }, ${activity.superclass}->dispatchTouchEvent(Landroid/view/MotionEvent;)Z"))
++        }
++    }
++}
++
++/** Touch wrapper also owns its scratch register; no borrowing from native implementations. */
++internal fun smoothZoomTouchWrapper(owner: String, flags: Int, fallback: String): MutableMethod {
++    return ImmutableMethod(owner, "dispatchTouchEvent",
++        listOf(ImmutableMethodParameter("Landroid/view/MotionEvent;", null, null)),
++        "Z", flags, null, null, MutableMethodImplementation(3),
++    ).toMutable().apply {
++        addInstructionsWithLabels(0, """
++            invoke-static { p0, p1 }, $SMOOTH_ZOOM->onTouchEvent(Landroid/app/Activity;Landroid/view/MotionEvent;)Z
++            move-result v0
++            if-nez v0, :return_result
++            $fallback
++            move-result v0
++            :return_result
++            return v0
++        """)
 +    }
 +}
 +
@@ -1041,15 +1337,16 @@ index d64eb6c..572d3bf 100644
  </resources>
 diff --git a/patches/src/test/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomCallbackTest.kt b/patches/src/test/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomCallbackTest.kt
 new file mode 100644
-index 0000000..0f17ba7
+index 0000000..5dcf829
 --- /dev/null
 +++ b/patches/src/test/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomCallbackTest.kt
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,54 @@
 +package app.morphe.patches.youtube.layout.player.fullscreen
 +
 +import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
 +import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod.Companion.toMutable
 +import com.android.tools.smali.dexlib2.AccessFlags
++import com.android.tools.smali.dexlib2.Opcode
 +import com.android.tools.smali.dexlib2.builder.MutableMethodImplementation
 +import com.android.tools.smali.dexlib2.iface.instruction.FiveRegisterInstruction
 +import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
@@ -1061,9 +1358,20 @@ index 0000000..0f17ba7
 +import kotlin.test.assertTrue
 +
 +class SmoothZoomCallbackTest {
++    @Test fun `inherited activity dispatch keeps a super fallback`() = verifyTouch("invoke-super", Opcode.INVOKE_SUPER)
++    @Test fun `existing activity dispatch keeps a virtual fallback`() = verifyTouch("invoke-virtual", Opcode.INVOKE_VIRTUAL)
 +    @Test fun `two register void callback needs no free register`() = verify("onScaleEnd", "V", 2)
 +    @Test fun `boolean scale callback keeps native fallback`() = verify("onScale", "Z", 3)
 +    @Test fun `begin callback keeps native fallback`() = verify("onScaleBegin", "Z", 3)
++
++    private fun verifyTouch(invoke: String, opcode: Opcode) {
++        val wrapper = smoothZoomTouchWrapper("Ltest/MainActivity;", AccessFlags.PUBLIC.value,
++            "$invoke { p0, p1 }, Ltest/Base;->dispatchTouchEvent(Landroid/view/MotionEvent;)Z")
++        assertEquals(3, wrapper.implementation!!.registerCount)
++        val fallback = wrapper.implementation!!.instructions.single { it.opcode == opcode } as FiveRegisterInstruction
++        assertEquals(1, fallback.registerC)
++        assertEquals(2, fallback.registerD)
++    }
 +
 +    private fun verify(name: String, returnType: String, registers: Int) {
 +        val original = ImmutableMethod(
