@@ -1,17 +1,17 @@
-Fixes **Pause on scroll or minimise** pausing the video during an upward swipe to expand the mini-player or enter fullscreen.
+Fixes the **Smooth pinch zoom** patching failure reported on YouTube 21.20.405: `Could not find a free register from startIndex: 0 excluding: [0, 1]`.
 
-Scroll-to-pause now waits until the finger is released, then allows 250 ms for player-size changes to be reported. A player-type change cancels the queued scroll pause and blocks the remainder of that gesture. Pinches and cancelled touches are excluded. Actual minimising/backgrounding still uses its separate pause path.
+Pinch callbacks now use separate wrapper methods with an explicit scratch register. The native callback is preserved under a separate name and called when smooth zoom is disabled. Three bytecode regression fixtures cover the two-register void callback and both boolean callbacks.
 
-Ordinary list scrolling still pauses playback shortly after release. Smooth pinch zoom and the existing pause settings remain included.
+Adds **Resume when scrolling stops** under YouTube → Settings → Morphe → Video. It defaults to **off**. When enabled, videos paused by scroll-to-pause can resume after 0.8 seconds without scrolling. It waits for a pause acknowledgement. Existing manual pauses and minimise pauses do not arm resume; video/player changes, a manual control tap, playback state changes, backgrounding, and switching the option off cancel resume. The prior swipe-to-expand fix and smooth zoom remain included.
 
-## Update
+## Install
 
-In Morphe Manager → Sources, update **ScrollPause custom patches** to **1.47.2**, then repatch your original **YouTube 21.20.405** APK using that source. Updating the source alone does not change the installed YouTube APK.
+Update your ScrollPause source to **1.47.3**, then repatch an original **YouTube 21.20.405** APK with **Pause on scroll or minimise** and **Smooth pinch zoom** selected. Updating a source alone does not alter the installed YouTube APK. Keep YouTube's Zoom to fill and Morphe's Disable pinch-to-zoom gesture off for smooth zoom. Reopen the video after changing zoom settings.
 
-Keep **Pause on scroll or minimise** selected and keep **Smooth pinch zoom** selected if wanted. Existing settings can remain as they are.
+Automatic resume is optional: leave the new switch off for manual resuming.
 
 ## Validation
 
-All 36 standalone checks passed: 11 pause-policy, 14 smooth-zoom, and 11 new scroll/player-resize regression checks. The Android build passed. The fix still needs confirmation on the user's phone; the reported device interaction was reproduced as gesture-policy event sequences, not on an Android device here.
+Full Android build passed. All 47 standalone policy checks and 3 bytecode callback regression tests passed. The new resume extension and setting were verified in the compiled bundle. The exact register-exhaustion case was tested synthetically; this build has not been applied to a YouTube APK or tested on an Android device here. Please verify pinch behaviour and automatic resume on your phone.
 
-This is an unofficial custom derivative of Morphe Patches 1.47.0. Source changes, pinned upstream revision, reproducible build workflow, GPLv3 licence and Section 7 notices are included. No YouTube APK is included.
+This is an unofficial custom derivative of Morphe Patches 1.47.0. The source archive and repository include the changes, pinned upstream revision, reproducible build/test workflow, GPLv3 licence, and Section 7 notices. No YouTube APK is included.

@@ -1,6 +1,6 @@
 # ScrollPause custom patch source for Morphe
 
-Custom source changes prepared 20 October 2026. This is an unofficial modification of Morphe Patches. This folder contains the reproducible source; the separately supplied `ScrollPause-1.47.2.mpp` is the compiled importable bundle.
+Custom source changes prepared 20 October 2026. This is an unofficial modification of Morphe Patches. This folder contains the reproducible source; the separately supplied `ScrollPause-1.47.3.mpp` is the compiled importable bundle.
 
 ## Remote import
 
@@ -20,9 +20,17 @@ Select **Pause on scroll or minimise** when patching. In YouTube → Settings �
 
 - **Pause when scrolling**: enabled by default. Drag-scrolling the main YouTube screen pauses an open regular video, even if it stays visible. A gesture must exceed Android's touch slop; automatic scrolling without a drag is ignored. This observes normal Android view scrolling. Controls implemented wholly outside Android view scrolling need device verification.
 - **Pause when minimised**: enabled by default. Entering YouTube's mini-player, picture-in-picture, or stopping the main activity pauses an open regular video. Rotation is excluded. Opening a separate full-screen activity can also stop the main activity and pause it.
-- Resuming playback is manual. Paused videos remain paused. Shorts and inline feed previews are excluded.
+- Resuming playback is manual by default. The optional Resume when scrolling stops switch is off by default. Videos that were already paused remain paused. Shorts and inline feed previews are excluded.
 - A brief pending request handles buffering during the trigger. Requests expire after 1.5 seconds. Pause events are rate limited during a fling.
 - Pause uses the activity's media controller when available, otherwise the same Android pause-only media-key mechanism as upstream's screen-lock pause feature. Casting and interactions with other media apps require device verification.
+
+### Register fix and optional scroll resume (1.47.3)
+
+Fixes the pinch patch's `Could not find a free register` failure by wrapping callbacks in a separate method with its own scratch register. No spare register is required in the native callback.
+
+**Settings → Morphe → Video → Resume when scrolling stops** is **off by default**. If enabled, it can resume a video paused by scrolling after 0.8 seconds without scrolling. A manually paused video or a minimise pause does not arm automatic resume. Manual control taps, video/player changes, backgrounding, and disabling the switch cancel it. Pause acknowledgement is required.
+
+All 47 standalone policy checks, 3 pinch-callback bytecode regression tests, and the full Android build passed: https://github.com/PulseRH/youtube-scrollpause-20261020/actions/runs/39414035400 . The new setting and extension were checked inside the compiled bundle. Real APK patching and device behaviour still require verification.
 
 ### Player resize gesture fix (1.47.2)
 
