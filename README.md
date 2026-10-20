@@ -2,6 +2,18 @@
 
 Custom source changes prepared 20 October 2026. This is an unofficial modification of Morphe Patches. This folder contains the reproducible source; the separately supplied `ScrollPause-1.47.0.mpp` is the compiled importable bundle.
 
+## Remote import
+
+In Morphe Manager, choose **Sources → + → Remote** and paste:
+
+`https://github.com/PulseRH/youtube-scrollpause-20261020`
+
+Or open https://morphe.software/add-source?github=PulseRH/youtube-scrollpause-20261020&name=ScrollPause .
+
+Use **ScrollPause custom patches** as the YouTube source, select **Pause on scroll or minimise**, and patch a supported original YouTube APK. This bundle already includes upstream patches. The current bundle targets YouTube **21.20.405** as its first non-experimental version. Source imports can fetch future releases; this does not automatically rebuild this project when upstream changes.
+
+Compiled bundle and source downloads are available from https://github.com/PulseRH/youtube-scrollpause-20261020/releases/latest .
+
 ## Behaviour
 
 Select **Pause on scroll or minimise** when patching. In YouTube → Settings → Morphe → Video:
@@ -16,7 +28,7 @@ Select **Pause on scroll or minimise** when patching. In YouTube → Settings �
 
 Pinned upstream: https://github.com/MorpheApp/morphe-patches/commit/e5464395441e916b643af4e2175c4e253e6df487 (1.47.0).
 
-The patch inherits that source's supported versions. For this build, **21.20.405** is the first non-experimental target in the upstream compatibility list. Your **21.04.223** is not listed. Use a supported original YouTube APK and repatch with this custom bundle; compatibility has not been tested against any APK here.
+The patch inherits that source's supported versions. For this build, **21.20.405** is the first non-experimental target in the upstream compatibility list. **21.04.223** is not listed. Use a supported original YouTube APK and repatch with this custom bundle; compatibility has not been tested against any APK here.
 
 ## Build
 

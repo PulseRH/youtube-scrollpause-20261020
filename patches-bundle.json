@@ -1,0 +1,7 @@
+{
+  "version": "1.47.0",
+  "download_url": "https://github.com/PulseRH/youtube-scrollpause-20261020/releases/download/v1.47.0-scrollpause.1/ScrollPause-1.47.0.mpp",
+  "created_at": "2026-10-20T10:53:32",
+  "description": "ScrollPause is an unofficial custom bundle based on Morphe Patches 1.47.0.\n\nAdds **Pause on scroll or minimise** for regular YouTube videos:\n- Pause after drag-scrolling, even while the video remains visible.\n- Pause on entering the mini-player, picture-in-picture, or the background.\n- Both settings default to enabled. Resume playback manually.\n\nImport this repository through Morphe Manager → Sources → + → Remote. Use **ScrollPause custom patches** as the YouTube source and select **Pause on scroll or minimise**. This bundle contains upstream patches too.\n\nSupported non-experimental target: YouTube **21.20.405**. YouTube 21.04.223 is not supported by the pinned upstream source. Requires Morphe patcher 1.14.0 or newer.\n\nThe full Android build and all 11 standalone policy checks passed. This bundle has not been tested against a YouTube APK or on an Android device. Shorts and feed previews are excluded. Opening a separate full-screen activity may also pause playback. Mouse/trackpad wheel input is not hooked.\n\nSource changes, pinned upstream revision, reproducible build workflow, licence and notices are in this repository and the attached source archive. No YouTube APK is included.",
+  "page_url": "https://github.com/PulseRH/youtube-scrollpause-20261020/releases/tag/v1.47.0-scrollpause.1"
+}
