@@ -1,6 +1,6 @@
 # ScrollPause custom patch source for Morphe
 
-Custom source changes prepared 20 October 2026. This is an unofficial modification of Morphe Patches. It is not an APK or an importable `.mpp` file.
+Custom source changes prepared 20 October 2026. This is an unofficial modification of Morphe Patches. This folder contains the reproducible source; the separately supplied `ScrollPause-1.47.0.mpp` is the compiled importable bundle.
 
 ## Behaviour
 
@@ -38,7 +38,7 @@ Inside `upstream`, run `./gradlew.bat :patches:buildAndroid`. Build outputs are 
 - Modified Android string XML parsed successfully.
 - `git diff --check` passed.
 - The patch was checked and applied against a fresh worktree at the pinned upstream revision.
-- Full Gradle build is blocked locally: Morphe's package registry returns HTTP 401 for the available GitHub login. No `.mpp`, APK compatibility check, or Android device test has been completed. The workflow is supplied but has not been run.
+- Full Android build passed on GitHub Actions: https://github.com/PulseRH/youtube-scrollpause-20261020/actions/runs/39409318926 . Local builds still need a credential with package read access. The compiled bundle contains the custom patch class and both custom extension classes. No YouTube APK compatibility check or Android device test has been completed.
 
 Before daily use, verify scrolling comments and suggestions, a paused video, manual resume, entering/re-entering the mini-player, PiP, Home/app switch, rotation, buffering, Shorts, both settings disabled, and playback with another media app present. These remain required device checks.
 
