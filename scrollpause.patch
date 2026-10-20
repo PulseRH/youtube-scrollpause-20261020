@@ -40,10 +40,10 @@ index 0000000..5a173ba
 +}
 diff --git a/custom-tests/ScrollPauseGestureTest.java b/custom-tests/ScrollPauseGestureTest.java
 new file mode 100644
-index 0000000..490d9a0
+index 0000000..1148cc4
 --- /dev/null
 +++ b/custom-tests/ScrollPauseGestureTest.java
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,88 @@
 +package app.morphe.extension.youtube.patches;
 +
 +public final class ScrollPauseGestureTest {
@@ -103,6 +103,32 @@ index 0000000..490d9a0
 +        gesture.scroll(6400);
 +        check(gesture.ready(6500, gesture.revision()), "Actual fling scrolling after release is included");
 +        check(!gesture.ready(8000, gesture.revision()), "Expired gesture cannot pause later playback");
++
++        gesture.begin(9000);
++        gesture.move(9020);
++        gesture.scroll(9030, true);
++        token = gesture.revision();
++        check(gesture.ready(9040, token), "Confirmed list pauses while finger is still held down");
++        check(gesture.confirmedList(), "List confirmation selects immediate path");
++        gesture.move(9060);
++        gesture.scroll(9070, true);
++        check(gesture.ready(9080, token), "Continued held scrolling remains eligible");
++        gesture.block(9100);
++        check(!gesture.ready(9110, token), "Player resize cancels even a confirmed list gesture");
++        gesture.move(9120);
++        gesture.scroll(9130, true);
++        check(!gesture.ready(9140, gesture.revision()), "Parent interception cannot re-arm immediate pause");
++        check(!gesture.confirmedList(), "Resize clears list confirmation");
++
++        gesture.begin(10000);
++        gesture.scroll(10020, true);
++        check(!gesture.ready(10030, gesture.revision()), "List tap plus layout movement does not pause");
++        gesture.move(10040);
++        check(!gesture.ready(10050, gesture.revision()), "Movement alone still needs an actual scroll notification");
++        gesture.scroll(10060, true);
++        check(gesture.ready(10070, gesture.revision()), "Next real list scroll regains immediate pause");
++        gesture.release();
++        check(gesture.ready(10100, gesture.revision()), "Confirmed list fling remains supported");
 +        System.out.println("PASS: " + checks + " scroll/resize regression checks");
 +    }
 +}
@@ -244,10 +270,10 @@ index 0000000..abf6e82
 +}
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java
 new file mode 100644
-index 0000000..dda2a04
+index 0000000..efe9e9b
 --- /dev/null
 +++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java
-@@ -0,0 +1,293 @@
+@@ -0,0 +1,340 @@
 +package app.morphe.extension.youtube.patches;
 +
 +import android.app.Activity;
@@ -292,11 +318,13 @@ index 0000000..dda2a04
 +    private static boolean resumeCheckScheduled;
 +    private static boolean touchMoved;
 +    private static String videoId;
++    private static WeakReference<View> touchedListRef = new WeakReference<>(null);
 +
 +    /** A player pan must not leave a half-observed scroll/resume gesture armed. */
 +    public static void onPlayerPan() {
 +        if (!registered) return;
 +        touching = false;
++        touchedListRef.clear();
 +        scrollGesture.block(SystemClock.uptimeMillis());
 +        scrollPolicy.cancel();
 +        resumePolicy.cancel();
@@ -307,6 +335,7 @@ index 0000000..dda2a04
 +        if (event == null) return;
 +        switch (event.getActionMasked()) {
 +            case MotionEvent.ACTION_DOWN:
++                touchedListRef.clear();
 +                downX = event.getX();
 +                downY = event.getY();
 +                touching = true;
@@ -324,6 +353,7 @@ index 0000000..dda2a04
 +            case MotionEvent.ACTION_CANCEL:
 +            case MotionEvent.ACTION_POINTER_DOWN:
 +                touching = false;
++                touchedListRef.clear();
 +                scrollGesture.block(SystemClock.uptimeMillis());
 +                scrollPolicy.cancel();
 +                resumePolicy.cancel();
@@ -334,6 +364,32 @@ index 0000000..dda2a04
 +                scrollGesture.release();
 +                scheduleScrollPause();
 +                break;
++        }
++    }
++
++    /** Hooked in RecyclerView.onTouchEvent, not the outer player drag container. */
++    public static void onListTouch(View list, MotionEvent event) {
++        if (!registered || list == null || event == null) return;
++        switch (event.getActionMasked()) {
++            case MotionEvent.ACTION_DOWN:
++            case MotionEvent.ACTION_MOVE:
++                if (touching && event.getPointerCount() == 1) {
++                    touchedListRef = new WeakReference<>(list);
++                }
++                break;
++            case MotionEvent.ACTION_CANCEL:
++                if (touchedListRef.get() == list) {
++                    // A parent took over (for example to expand the player).
++                    touchedListRef.clear();
++                    scrollGesture.block(SystemClock.uptimeMillis());
++                    scrollPolicy.cancel();
++                    resumePolicy.cancel();
++                }
++                break;
++            case MotionEvent.ACTION_POINTER_DOWN:
++                touchedListRef.clear();
++                break;
++            // Keep the source through ACTION_UP for genuine list flings.
 +        }
 +    }
 +
@@ -409,13 +465,17 @@ index 0000000..dda2a04
 +            if (!Objects.equals(videoId, id)) {
 +                videoId = id;
 +                resumePolicy.cancel();
++                touchedListRef.clear();
++                scrollGesture.block(SystemClock.uptimeMillis());
++                scrollPolicy.cancel();
 +            }
 +        });
 +    }
 +
 +    private static final ViewTreeObserver.OnScrollChangedListener SCROLL_LISTENER = () -> {
 +        resumePolicy.scrolled(SystemClock.uptimeMillis());
-+        scrollGesture.scroll(SystemClock.uptimeMillis());
++        View list = touchedListRef.get();
++        scrollGesture.scroll(SystemClock.uptimeMillis(), list != null && list.isAttachedToWindow());
 +        scheduleScrollPause();
 +    };
 +
@@ -428,19 +488,29 @@ index 0000000..dda2a04
 +
 +    private static void scheduleScrollPause() {
 +        int revision = scrollGesture.revision();
++        if (scrollGesture.confirmedList()) {
++            // A real list received this drag and a scroll was reported. Do not
++            // wait for finger release or the player-resize grace period.
++            pauseScrollIfEligible(revision);
++            return;
++        }
 +        if (scheduledScrollRevision == revision || !scrollGesture.ready(SystemClock.uptimeMillis(), revision)) return;
 +        scheduledScrollRevision = revision;
 +        // Wait for release and for the player transition to become visible. Resizing the
 +        // player can emit scroll notifications before its PlayerType changes.
 +        Utils.runOnMainThreadDelayed(() -> {
 +            if (scheduledScrollRevision == revision) scheduledScrollRevision = -1;
-+            Activity activity = activityRef.get();
-+            if (scrollGesture.ready(SystemClock.uptimeMillis(), revision)
-+                    && started && activity != null && activity.hasWindowFocus()
-+                    && stablePlayer() && Settings.PAUSE_ON_SCROLL.get()) {
-+                requestPause(scrollPolicy);
-+            }
++            pauseScrollIfEligible(revision);
 +        }, 250);
++    }
++
++    private static void pauseScrollIfEligible(int revision) {
++        Activity activity = activityRef.get();
++        if (scrollGesture.ready(SystemClock.uptimeMillis(), revision)
++                && started && activity != null && activity.hasWindowFocus()
++                && stablePlayer() && Settings.PAUSE_ON_SCROLL.get()) {
++            requestPause(scrollPolicy);
++        }
 +    }
 +
 +    private static void detachScrollListener() {
@@ -466,6 +536,7 @@ index 0000000..dda2a04
 +        @Override public void onActivityStopped(Activity activity) {
 +            if (activityRef.get() != activity) return;
 +            started = false;
++            touchedListRef.clear();
 +            resumePolicy.cancel();
 +            scrollGesture.block(SystemClock.uptimeMillis());
 +            detachScrollListener();
@@ -479,6 +550,7 @@ index 0000000..dda2a04
 +        @Override public void onActivityDestroyed(Activity activity) {
 +            if (activityRef.get() != activity) return;
 +            started = false;
++            touchedListRef.clear();
 +            resumePolicy.cancel();
 +            scrollGesture.block(SystemClock.uptimeMillis());
 +            detachScrollListener();
@@ -506,6 +578,7 @@ index 0000000..dda2a04
 +                // A swipe to expand/fullscreen is a player gesture, not list scrolling.
 +                // Block the whole gesture so later MOVE events cannot re-arm it.
 +                scrollGesture.block(SystemClock.uptimeMillis());
++                touchedListRef.clear();
 +                scrollPolicy.cancel();
 +                resumePolicy.cancel();
 +                if (Settings.PAUSE_ON_MINIMISE.get()
@@ -606,22 +679,22 @@ index 8941312..f008936 100644
          if (child != null && child != view && child.getWidth() > 8 && child.getHeight() > 8) {
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollPauseGesture.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollPauseGesture.java
 new file mode 100644
-index 0000000..ff15c9c
+index 0000000..b14bc10
 --- /dev/null
 +++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollPauseGesture.java
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,52 @@
 +package app.morphe.extension.youtube.patches;
 +
 +/** Scroll intent survives a fling, but never a player-size transition or a pinch. */
 +final class ScrollPauseGesture {
-+    private boolean blocked = true, moved, scrolled, released;
++    private boolean blocked = true, moved, scrolled, released, confirmedList;
 +    private long until, settleUntil;
 +    private int revision;
 +
 +    void begin(long now) {
 +        revision++;
 +        blocked = now < settleUntil;
-+        moved = scrolled = released = false;
++        moved = scrolled = released = confirmedList = false;
 +        until = 0;
 +    }
 +
@@ -632,8 +705,17 @@ index 0000000..ff15c9c
 +    }
 +
 +    void scroll(long now) {
-+        if (!blocked && moved && now < until) scrolled = true;
++        scroll(now, false);
 +    }
++
++    void scroll(long now, boolean listSource) {
++        if (!blocked && moved && now < until) {
++            scrolled = true;
++            confirmedList |= listSource;
++        }
++    }
++
++    boolean confirmedList() { return confirmedList; }
 +
 +    void release() { released = true; }
 +
@@ -641,6 +723,7 @@ index 0000000..ff15c9c
 +        revision++;
 +        blocked = true;
 +        scrolled = false;
++        confirmedList = false;
 +        until = 0;
 +        settleUntil = now + 300;
 +    }
@@ -648,7 +731,7 @@ index 0000000..ff15c9c
 +    int revision() { return revision; }
 +
 +    boolean ready(long now, int expectedRevision) {
-+        return revision == expectedRevision && !blocked && moved && scrolled && released
++        return revision == expectedRevision && !blocked && moved && scrolled && (released || confirmedList)
 +                && now >= settleUntil && now < until;
 +    }
 +}
@@ -1094,7 +1177,7 @@ index 6f307b9..b5b608b 100644
      public static final EnumSetting<PlaybackBufferSize> PLAYBACK_BUFFER_SIZE = new EnumSetting<>(
              "morphe_playback_buffer_size", PlaybackBufferSize.DEFAULT, true);
 diff --git a/gradle.properties b/gradle.properties
-index 2a3d7ca..bfe32b1 100644
+index 2a3d7ca..b146b33 100644
 --- a/gradle.properties
 +++ b/gradle.properties
 @@ -3,4 +3,4 @@ org.gradle.jvmargs = -Xms512M -Xmx2048M
@@ -1102,7 +1185,7 @@ index 2a3d7ca..bfe32b1 100644
  android.useAndroidX = true
  kotlin.code.style = official
 -version = 1.47.0
-+version = 1.47.4
++version = 1.47.5
 diff --git a/patches/build.gradle.kts b/patches/build.gradle.kts
 index 831d7ff..a989a26 100644
 --- a/patches/build.gradle.kts
@@ -1120,12 +1203,13 @@ index 831d7ff..a989a26 100644
          contact = "na"
 diff --git a/patches/src/main/kotlin/app/morphe/patches/youtube/interaction/autopause/AutoPausePatch.kt b/patches/src/main/kotlin/app/morphe/patches/youtube/interaction/autopause/AutoPausePatch.kt
 new file mode 100644
-index 0000000..a04232a
+index 0000000..4ecea36
 --- /dev/null
 +++ b/patches/src/main/kotlin/app/morphe/patches/youtube/interaction/autopause/AutoPausePatch.kt
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,87 @@
 +package app.morphe.patches.youtube.interaction.autopause
 +
++import app.morphe.patcher.Fingerprint
 +import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
 +import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
 +import app.morphe.patcher.patch.bytecodePatch
@@ -1163,6 +1247,16 @@ index 0000000..a04232a
 +            SwitchPreference("morphe_resume_after_scroll", summary = true),
 +        )
 +        hookVideoId("$EXTENSION_CLASS->onVideoChanged(Ljava/lang/String;)V")
++        // Framework override: name/signature survive application obfuscation.
++        Fingerprint(
++            definingClass = "Landroid/support/v7/widget/RecyclerView;",
++            name = "onTouchEvent",
++            returnType = "Z",
++            parameters = listOf("Landroid/view/MotionEvent;"),
++        ).method.addInstruction(
++            0,
++            "invoke-static/range { p0 .. p1 }, $EXTENSION_CLASS->onListTouch(Landroid/view/View;Landroid/view/MotionEvent;)V"
++        )
 +        // Register lifecycle callbacks here; do not create a window before Activity.onCreate.
 +        YouTubeActivityOnCreateFingerprint.method.addInstruction(
 +            0,
