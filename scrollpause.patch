@@ -1,0 +1,391 @@
+diff --git a/custom-tests/AutoPausePolicyTest.java b/custom-tests/AutoPausePolicyTest.java
+new file mode 100644
+index 0000000..5a173ba
+--- /dev/null
++++ b/custom-tests/AutoPausePolicyTest.java
+@@ -0,0 +1,34 @@
++package app.morphe.extension.youtube.patches;
++
++public final class AutoPausePolicyTest {
++    private static int checks;
++    private static void check(boolean condition, String message) {
++        checks++;
++        if (!condition) throw new AssertionError(message);
++    }
++
++    public static void main(String[] args) {
++        AutoPausePolicy policy = new AutoPausePolicy();
++        check(policy.request(1000, true), "Playing video pauses on first scroll");
++        check(!policy.request(1020, true), "Fling events do not flood media commands");
++        check(policy.request(1600, true), "A later independent scroll can pause again");
++        check(!policy.onPlaying(1700, true, true), "Manual resume after a pause stays playing");
++
++        policy = new AutoPausePolicy();
++        check(!policy.request(1000, false), "Buffering does not send an ineffective immediate pause");
++        check(policy.onPlaying(1100, true, true), "Buffering finishes shortly after minimising: pause");
++        check(!policy.onPlaying(1200, true, true), "Pending request is consumed once");
++
++        policy = new AutoPausePolicy();
++        policy.request(1000, false);
++        check(!policy.onPlaying(3000, true, true), "Expired requests cannot pause an unrelated later video");
++        policy.request(4000, false);
++        check(!policy.onPlaying(4100, false, true), "Turning off the setting cancels a pending pause");
++        policy.request(5000, false);
++        check(!policy.onPlaying(5100, true, false), "Switching to Shorts cannot use a regular-video pause");
++        policy.request(6000, false);
++        policy.cancel();
++        check(!policy.onPlaying(6100, true, true), "Returning to the player cancels a pending minimise pause");
++        System.out.println("PASS: " + checks + " pause-policy checks");
++    }
++}
+diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java
+new file mode 100644
+index 0000000..1de9cfd
+--- /dev/null
++++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java
+@@ -0,0 +1,190 @@
++package app.morphe.extension.youtube.patches;
++
++import android.app.Activity;
++import android.app.Application;
++import android.content.Context;
++import android.media.AudioManager;
++import android.media.session.MediaController;
++import android.os.Bundle;
++import android.os.SystemClock;
++import android.view.KeyEvent;
++import android.view.MotionEvent;
++import android.view.View;
++import android.view.ViewConfiguration;
++import android.view.ViewTreeObserver;
++
++import java.lang.ref.WeakReference;
++
++import app.morphe.extension.shared.Logger;
++import app.morphe.extension.shared.Utils;
++import app.morphe.extension.youtube.settings.Settings;
++import app.morphe.extension.youtube.shared.PlayerType;
++import app.morphe.extension.youtube.shared.ShortsPlayerState;
++import app.morphe.extension.youtube.shared.VideoState;
++import kotlin.Unit;
++
++/** Custom addition, 2026-10-20. See the upstream LICENSE and NOTICE. */
++@SuppressWarnings("unused")
++public final class AutoPausePatch {
++    private static final AutoPausePolicy scrollPolicy = new AutoPausePolicy();
++    private static final AutoPausePolicy minimisePolicy = new AutoPausePolicy();
++    private static WeakReference<Activity> activityRef = new WeakReference<>(null);
++    private static WeakReference<View> rootRef = new WeakReference<>(null);
++    private static boolean registered;
++    private static boolean started;
++    private static float downX, downY;
++    private static int touchSlop;
++    private static boolean touching;
++    private static long gestureUntil;
++
++    /** Injection point. Observes a gesture; never consumes or changes a touch event. */
++    public static void onTouchEvent(MotionEvent event) {
++        if (event == null) return;
++        switch (event.getActionMasked()) {
++            case MotionEvent.ACTION_DOWN:
++                downX = event.getX();
++                downY = event.getY();
++                touching = true;
++                gestureUntil = 0;
++                scrollPolicy.cancel();
++                break;
++            case MotionEvent.ACTION_MOVE:
++                if (touching && (Math.abs(event.getX() - downX) > touchSlop
++                        || Math.abs(event.getY() - downY) > touchSlop)) {
++                    gestureUntil = SystemClock.uptimeMillis() + 1500;
++                }
++                break;
++            case MotionEvent.ACTION_CANCEL:
++            case MotionEvent.ACTION_UP:
++                touching = false;
++                break;
++        }
++    }
++
++    private static boolean regularVideo() {
++        PlayerType type = PlayerType.getCurrent();
++        return !ShortsPlayerState.isOpen() && !type.isNoneOrHidden()
++                && type != PlayerType.INLINE_MINIMAL;
++    }
++
++    private static void requestPause(AutoPausePolicy policy) {
++        // A paused video must stay paused; do not arm a pending pause on an already paused video.
++        if (!regularVideo() || VideoState.getCurrent() == VideoState.PAUSED
++                || VideoState.getCurrent() == VideoState.ENDED) return;
++        if (policy.request(SystemClock.uptimeMillis(), VideoState.getCurrent() == VideoState.PLAYING)) {
++            sendPause();
++        }
++    }
++
++    private static void sendPause() {
++        try {
++            Activity activity = activityRef.get();
++            if (activity == null) return;
++            MediaController controller = activity.getMediaController();
++            if (controller != null) {
++                // Prefer an explicitly associated session, so another app cannot receive the command.
++                controller.getTransportControls().pause();
++                return;
++            }
++            // Same pause-only media command used by upstream's pause-on-screen-lock feature.
++            AudioManager audio = (AudioManager) activity.getSystemService(Context.AUDIO_SERVICE);
++            if (audio == null || !audio.isMusicActive()) return;
++            long now = SystemClock.uptimeMillis();
++            audio.dispatchMediaKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE, 0));
++            audio.dispatchMediaKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PAUSE, 0));
++        } catch (Exception ex) {
++            Logger.printException(() -> "Auto-pause failed", ex);
++        }
++    }
++
++    private static final ViewTreeObserver.OnScrollChangedListener SCROLL_LISTENER = () -> {
++        Activity activity = activityRef.get();
++        if (started && activity != null && activity.hasWindowFocus()
++                && SystemClock.uptimeMillis() < gestureUntil && Settings.PAUSE_ON_SCROLL.get()) {
++            requestPause(scrollPolicy);
++        }
++    };
++
++    private static void detachScrollListener() {
++        View root = rootRef.get();
++        if (root != null && root.getViewTreeObserver().isAlive()) {
++            root.getViewTreeObserver().removeOnScrollChangedListener(SCROLL_LISTENER);
++        }
++        rootRef.clear();
++    }
++
++    private static final Application.ActivityLifecycleCallbacks CALLBACKS =
++            new Application.ActivityLifecycleCallbacks() {
++        @Override public void onActivityStarted(Activity activity) {
++            if (activityRef.get() != activity) return;
++            started = true;
++            minimisePolicy.cancel();
++            detachScrollListener();
++            View root = activity.getWindow().getDecorView();
++            rootRef = new WeakReference<>(root);
++            root.getViewTreeObserver().addOnScrollChangedListener(SCROLL_LISTENER);
++        }
++
++        @Override public void onActivityStopped(Activity activity) {
++            if (activityRef.get() != activity) return;
++            started = false;
++            gestureUntil = 0;
++            detachScrollListener();
++            scrollPolicy.cancel();
++            // Exclude configuration changes such as rotating the phone.
++            if (!activity.isChangingConfigurations() && Settings.PAUSE_ON_MINIMISE.get()) {
++                requestPause(minimisePolicy);
++            }
++        }
++
++        @Override public void onActivityDestroyed(Activity activity) {
++            if (activityRef.get() != activity) return;
++            started = false;
++            detachScrollListener();
++            scrollPolicy.cancel();
++            minimisePolicy.cancel();
++            activityRef.clear();
++        }
++
++        @Override public void onActivityCreated(Activity a, Bundle b) {}
++        @Override public void onActivityResumed(Activity a) {}
++        @Override public void onActivityPaused(Activity a) {}
++        @Override public void onActivitySaveInstanceState(Activity a, Bundle b) {}
++    };
++
++    /** Injection point. Runs before the main activity's onCreate body. */
++    public static void initialize(Activity activity) {
++        activityRef = new WeakReference<>(activity);
++        touchSlop = ViewConfiguration.get(activity).getScaledTouchSlop();
++        if (registered) return;
++        registered = true;
++        activity.getApplication().registerActivityLifecycleCallbacks(CALLBACKS);
++
++        PlayerType.getOnChange().addObserver(type -> {
++            Utils.runOnMainThreadNowOrLater(() -> {
++                if (Settings.PAUSE_ON_MINIMISE.get()
++                        && (type == PlayerType.WATCH_WHILE_MINIMIZED
++                        || type == PlayerType.WATCH_WHILE_PICTURE_IN_PICTURE)) {
++                    requestPause(minimisePolicy);
++                } else {
++                    minimisePolicy.cancel();
++                }
++            });
++            return Unit.INSTANCE;
++        });
++
++        VideoState.getOnChange().addObserver(state -> {
++            Utils.runOnMainThreadNowOrLater(() -> {
++                if (state != VideoState.PLAYING) return;
++                long now = SystemClock.uptimeMillis();
++                if (scrollPolicy.onPlaying(now, Settings.PAUSE_ON_SCROLL.get(), started && regularVideo())) {
++                    sendPause();
++                }
++                if (minimisePolicy.onPlaying(now, Settings.PAUSE_ON_MINIMISE.get(), regularVideo())) {
++                    sendPause();
++                }
++            });
++            return Unit.INSTANCE;
++        });
++    }
++}
+diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePolicy.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePolicy.java
+new file mode 100644
+index 0000000..71bfff0
+--- /dev/null
++++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePolicy.java
+@@ -0,0 +1,29 @@
++package app.morphe.extension.youtube.patches;
++
++/** Main-thread-only, Android-independent pause request policy. Never requests play. */
++final class AutoPausePolicy {
++    private long pendingUntil;
++    private long lastPause = -500;
++
++    boolean request(long now, boolean playing) {
++        if (!playing) {
++            // A transition can arrive just before the PLAYING notification while buffering.
++            pendingUntil = now + 1500;
++            return false;
++        }
++        pendingUntil = 0;
++        if (now - lastPause < 500) return false;
++        lastPause = now;
++        return true;
++    }
++
++    boolean onPlaying(long now, boolean enabled, boolean eligible) {
++        boolean pending = pendingUntil > now;
++        pendingUntil = 0;
++        return pending && enabled && eligible && request(now, true);
++    }
++
++    void cancel() {
++        pendingUntil = 0;
++    }
++}
+diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java
+index 6f307b9..a956c52 100644
+--- a/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java
++++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java
+@@ -83,6 +83,9 @@ import app.morphe.extension.youtube.videoplayer.PlayAllButton.PlaylistIDPrefix;
+ import app.morphe.extension.youtube.videoplayer.PlayerIcons;
+ 
+ public class Settings extends SharedYouTubeSettings {
++    public static final BooleanSetting PAUSE_ON_SCROLL = new BooleanSetting("morphe_pause_on_scroll", TRUE);
++    public static final BooleanSetting PAUSE_ON_MINIMISE = new BooleanSetting("morphe_pause_on_minimise", TRUE);
++
+     // Video
+     public static final EnumSetting<PlaybackBufferSize> PLAYBACK_BUFFER_SIZE = new EnumSetting<>(
+             "morphe_playback_buffer_size", PlaybackBufferSize.DEFAULT, true);
+diff --git a/patches/build.gradle.kts b/patches/build.gradle.kts
+index 831d7ff..a989a26 100644
+--- a/patches/build.gradle.kts
++++ b/patches/build.gradle.kts
+@@ -4,8 +4,8 @@ group = "app.morphe"
+ 
+ patches {
+     about {
+-        name = "Morphe Patches"
+-        description = "Patches for Morphe"
++        name = "ScrollPause custom patches"
++        description = "Custom fork with pause on scroll and minimise; based on Morphe Patches"
+         source = "git@github.com:MorpheApp/morphe-patches.git"
+         author = "MorpheApp"
+         contact = "na"
+diff --git a/patches/src/main/kotlin/app/morphe/patches/youtube/interaction/autopause/AutoPausePatch.kt b/patches/src/main/kotlin/app/morphe/patches/youtube/interaction/autopause/AutoPausePatch.kt
+new file mode 100644
+index 0000000..77cca38
+--- /dev/null
++++ b/patches/src/main/kotlin/app/morphe/patches/youtube/interaction/autopause/AutoPausePatch.kt
+@@ -0,0 +1,72 @@
++package app.morphe.patches.youtube.interaction.autopause
++
++import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
++import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
++import app.morphe.patcher.patch.bytecodePatch
++import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod.Companion.toMutable
++import app.morphe.patches.all.misc.resources.addResourcesPatch
++import app.morphe.patches.shared.misc.settings.preference.SwitchPreference
++import app.morphe.patches.youtube.misc.playertype.playerTypeHookPatch
++import app.morphe.patches.youtube.misc.settings.PreferenceScreen
++import app.morphe.patches.youtube.misc.settings.settingsPatch
++import app.morphe.patches.youtube.shared.Constants.COMPATIBILITY_YOUTUBE
++import app.morphe.patches.youtube.shared.YouTubeActivityOnCreateFingerprint
++import com.android.tools.smali.dexlib2.AccessFlags
++import com.android.tools.smali.dexlib2.builder.MutableMethodImplementation
++import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
++import com.android.tools.smali.dexlib2.immutable.ImmutableMethodParameter
++
++private const val EXTENSION_CLASS =
++    "Lapp/morphe/extension/youtube/patches/AutoPausePatch;"
++
++@Suppress("unused")
++val autoPausePatch = bytecodePatch(
++    name = "Pause on scroll or minimise",
++    description = "Adds options to pause regular videos when scrolling, entering the mini-player, " +
++        "entering picture-in-picture, or sending YouTube to the background.",
++) {
++    compatibleWith(COMPATIBILITY_YOUTUBE)
++    dependsOn(settingsPatch, addResourcesPatch, playerTypeHookPatch)
++
++    execute {
++        PreferenceScreen.VIDEO.addPreferences(
++            SwitchPreference("morphe_pause_on_scroll", summary = true),
++            SwitchPreference("morphe_pause_on_minimise", summary = true),
++        )
++        // Register lifecycle callbacks here; do not create a window before Activity.onCreate.
++        YouTubeActivityOnCreateFingerprint.method.addInstruction(
++            0,
++            "invoke-static/range { p0 .. p0 }, $EXTENSION_CLASS->initialize(Landroid/app/Activity;)V",
++        )
++        // Observe gestures without replacing any touch listener or consuming events.
++        val activity = YouTubeActivityOnCreateFingerprint.classDef
++        val dispatch = activity.methods.firstOrNull {
++            it.name == "dispatchTouchEvent" && it.returnType == "Z" &&
++                it.parameterTypes == listOf("Landroid/view/MotionEvent;")
++        }
++        val touchHook = "invoke-static/range { p1 .. p1 }, $EXTENSION_CLASS->onTouchEvent(Landroid/view/MotionEvent;)V"
++        if (dispatch != null) {
++            dispatch.addInstruction(0, touchHook)
++        } else {
++            activity.methods.add(
++                ImmutableMethod(
++                    activity.type,
++                    "dispatchTouchEvent",
++                    listOf(ImmutableMethodParameter("Landroid/view/MotionEvent;", null, null)),
++                    "Z",
++                    AccessFlags.PUBLIC.value,
++                    null,
++                    null,
++                    MutableMethodImplementation(3),
++                ).toMutable().apply {
++                    addInstructions(0, """
++                        $touchHook
++                        invoke-super { p0, p1 }, ${activity.superclass}->dispatchTouchEvent(Landroid/view/MotionEvent;)Z
++                        move-result v0
++                        return v0
++                    """)
++                }
++            )
++        }
++    }
++}
+diff --git a/patches/src/main/resources/addresources/values/youtube/strings.xml b/patches/src/main/resources/addresources/values/youtube/strings.xml
+index d64eb6c..9aa423e 100644
+--- a/patches/src/main/resources/addresources/values/youtube/strings.xml
++++ b/patches/src/main/resources/addresources/values/youtube/strings.xml
+@@ -1498,4 +1498,8 @@ Limitation: Reverts to old style \'More videos\' overlay"</string>
+     <string name="morphe_player_icon_style_entry_sharp" translatable="false">Sharp</string>
+     <string name="morphe_player_icon_style_entry_custom">Custom</string>
+     <string name="morphe_shorts_icon_style_title">Shorts icon style</string>
++    <string name="morphe_pause_on_scroll_title">Pause when scrolling</string>
++    <string name="morphe_pause_on_scroll_summary">Pause regular videos when you scroll, even while the video remains visible. Resume playback manually.</string>
++    <string name="morphe_pause_on_minimise_title">Pause when minimised</string>
++    <string name="morphe_pause_on_minimise_summary">Pause regular videos on entering the mini-player, picture-in-picture, or the background. Resume playback manually.</string>
+ </resources>

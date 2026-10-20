@@ -1,0 +1,39 @@
+name: Build ScrollPause
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Prepare pinned upstream and apply custom patch
+        run: |
+          git init upstream
+          git -C upstream remote add origin https://github.com/MorpheApp/morphe-patches.git
+          git -C upstream fetch --depth 1 origin e5464395441e916b643af4e2175c4e253e6df487
+          git -C upstream checkout --detach FETCH_HEAD
+          git -C upstream apply --check ../scrollpause.patch
+          git -C upstream apply ../scrollpause.patch
+      - name: Test pause policy
+        working-directory: upstream
+        run: |
+          mkdir -p custom-tests/classes
+          javac -d custom-tests/classes extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePolicy.java custom-tests/AutoPausePolicyTest.java
+          java -cp custom-tests/classes app.morphe.extension.youtube.patches.AutoPausePolicyTest
+      - name: Build importable patch bundle
+        working-directory: upstream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./gradlew :patches:buildAndroid --no-daemon --console=plain
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ScrollPause-patch-bundle
+          path: upstream/patches/build/libs/
+          if-no-files-found: error
