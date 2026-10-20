@@ -1,6 +1,6 @@
 # ScrollPause custom patch source for Morphe
 
-Custom source changes prepared 20 October 2026. This is an unofficial modification of Morphe Patches. This folder contains the reproducible source; the separately supplied `ScrollPause-1.47.3.mpp` is the compiled importable bundle.
+Custom source changes prepared 20 October 2026. This is an unofficial modification of Morphe Patches. This folder contains the reproducible source; the separately supplied `ScrollPause-1.47.4.mpp` is the compiled importable bundle.
 
 ## Remote import
 
@@ -24,6 +24,12 @@ Select **Pause on scroll or minimise** when patching. In YouTube → Settings �
 - A brief pending request handles buffering during the trigger. Requests expire after 1.5 seconds. Pause events are rate limited during a fling.
 - Pause uses the activity's media controller when available, otherwise the same Android pause-only media-key mechanism as upstream's screen-lock pause feature. Casting and interactions with other media apps require device verification.
 
+### Brief percentage display and panning (1.47.4)
+
+Smooth pinch zoom now shows **1.1× · 110%** (for example) during zoom/pan and hides the label about 0.9 seconds after movement stops. Drag the cropped picture with one finger; offsets are clamped against actual video content and axes that are not cropped stay centred. The bottom control strip is left for seekbar interaction. Taps and multi-touch go through to the player. Pan drags are excluded from scroll pause/resume. There is no kinetic fling panning.
+
+The native zoom-to-fill snap remains bypassed. Existing pause and default-off resume settings remain included. Full Android build, 63 policy/geometry checks, and 5 bytecode wrapper tests passed: https://github.com/PulseRH/youtube-scrollpause-20261020/actions/runs/39416621783 . Real YouTube APK and phone touch behaviour remain unverified.
+
 ### Register fix and optional scroll resume (1.47.3)
 
 Fixes the pinch patch's `Could not find a free register` failure by wrapping callbacks in a separate method with its own scratch register. No spare register is required in the native callback.
@@ -40,7 +46,7 @@ Ordinary list scrolling pauses shortly after release. Update the source and **re
 
 ### Smooth pinch zoom (1.47.1)
 
-Select **Smooth pinch zoom** when patching. **YouTube → Settings → Morphe → Video → Smooth pinch zoom** defaults to on. This replaces the native fullscreen pinch callbacks with continuous centered zoom from 1× through 1.1×, 1.2× and up to 8×. Releasing a pinch keeps its scale. Zoom resets when leaving fullscreen or opening a different video. It does not implement drag-to-pan or the native zoom HUD.
+Select **Smooth pinch zoom** when patching. **YouTube → Settings → Morphe → Video → Smooth pinch zoom** defaults to on. This replaces the native fullscreen pinch callbacks with continuous centered zoom from 1× through 1.1×, 1.2× and up to 8×. Releasing a pinch keeps its scale. Zoom resets when leaving fullscreen or opening a different video. The initial 1.47.1 version lacked a zoom HUD and panning; both are provided by the custom implementation from 1.47.4.
 
 Turn off YouTube's own **Zoom to fill** option for a fitted 1× starting image, then reopen the video. While enabled, this takes priority over Morphe's **Fullscreen video scale** stretch/fill modes and its **Restore pinch to zoom** workaround. **Disable pinch-to-zoom gesture** still takes priority and disables zoom. Turning this custom setting off returns to the upstream handlers; reopen the video after changing it.
 
