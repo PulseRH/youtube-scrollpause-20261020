@@ -38,6 +38,74 @@ index 0000000..5a173ba
 +        System.out.println("PASS: " + checks + " pause-policy checks");
 +    }
 +}
+diff --git a/custom-tests/ScrollPauseGestureTest.java b/custom-tests/ScrollPauseGestureTest.java
+new file mode 100644
+index 0000000..490d9a0
+--- /dev/null
++++ b/custom-tests/ScrollPauseGestureTest.java
+@@ -0,0 +1,62 @@
++package app.morphe.extension.youtube.patches;
++
++public final class ScrollPauseGestureTest {
++    private static int checks;
++    private static void check(boolean value, String description) {
++        checks++;
++        if (!value) throw new AssertionError(description);
++    }
++    public static void main(String[] args) {
++        ScrollPauseGesture gesture = new ScrollPauseGesture();
++        gesture.begin(1000);
++        gesture.move(1020);
++        gesture.scroll(1030);
++        int token = gesture.revision();
++        check(!gesture.ready(1040, token), "Do not pause while finger is still maximising player");
++        gesture.release();
++        check(gesture.ready(1300, token), "A released real list scroll still pauses");
++
++        gesture.begin(2000);
++        gesture.move(2020);
++        gesture.scroll(2030);
++        gesture.release();
++        token = gesture.revision();
++        gesture.block(2100);
++        check(!gesture.ready(2300, token), "Delayed player-size change cancels queued scroll pause");
++        gesture.move(2310);
++        gesture.scroll(2320);
++        check(!gesture.ready(2330, gesture.revision()), "Further MOVE cannot re-arm the resize gesture");
++
++        gesture.begin(2500);
++        gesture.move(2510);
++        gesture.scroll(2520);
++        gesture.release();
++        check(gesture.ready(2780, gesture.revision()), "Next normal scroll works after transition settles");
++        gesture.block(2800);
++        gesture.begin(2900);
++        gesture.move(2910);
++        gesture.scroll(2920);
++        gesture.release();
++        check(!gesture.ready(3200, gesture.revision()), "Animation-tail touches stay excluded");
++
++        gesture.begin(4000);
++        gesture.move(4010);
++        gesture.scroll(4020);
++        gesture.block(4030);
++        gesture.release();
++        check(!gesture.ready(4300, gesture.revision()), "Pinching and cancelled touches do not pause");
++
++        gesture.begin(5000);
++        gesture.scroll(5010);
++        gesture.release();
++        check(!gesture.ready(5300, gesture.revision()), "Tap plus layout scroll is not a user scroll");
++        gesture.begin(6000);
++        gesture.move(6010);
++        gesture.release();
++        check(!gesture.ready(6300, gesture.revision()), "Swipe without actual view scrolling does not pause");
++        gesture.scroll(6400);
++        check(gesture.ready(6500, gesture.revision()), "Actual fling scrolling after release is included");
++        check(!gesture.ready(8000, gesture.revision()), "Expired gesture cannot pause later playback");
++        System.out.println("PASS: " + checks + " scroll/resize regression checks");
++    }
++}
 diff --git a/custom-tests/SmoothZoomScaleTest.java b/custom-tests/SmoothZoomScaleTest.java
 new file mode 100644
 index 0000000..abf6e82
@@ -77,10 +145,10 @@ index 0000000..abf6e82
 +}
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java
 new file mode 100644
-index 0000000..1de9cfd
+index 0000000..db5f79c
 --- /dev/null
 +++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java
-@@ -0,0 +1,190 @@
+@@ -0,0 +1,225 @@
 +package app.morphe.extension.youtube.patches;
 +
 +import android.app.Activity;
@@ -118,7 +186,8 @@ index 0000000..1de9cfd
 +    private static float downX, downY;
 +    private static int touchSlop;
 +    private static boolean touching;
-+    private static long gestureUntil;
++    private static final ScrollPauseGesture scrollGesture = new ScrollPauseGesture();
++    private static int scheduledScrollRevision = -1;
 +
 +    /** Injection point. Observes a gesture; never consumes or changes a touch event. */
 +    public static void onTouchEvent(MotionEvent event) {
@@ -128,18 +197,25 @@ index 0000000..1de9cfd
 +                downX = event.getX();
 +                downY = event.getY();
 +                touching = true;
-+                gestureUntil = 0;
++                scrollGesture.begin(SystemClock.uptimeMillis());
 +                scrollPolicy.cancel();
 +                break;
 +            case MotionEvent.ACTION_MOVE:
 +                if (touching && (Math.abs(event.getX() - downX) > touchSlop
 +                        || Math.abs(event.getY() - downY) > touchSlop)) {
-+                    gestureUntil = SystemClock.uptimeMillis() + 1500;
++                    scrollGesture.move(SystemClock.uptimeMillis());
 +                }
 +                break;
 +            case MotionEvent.ACTION_CANCEL:
++            case MotionEvent.ACTION_POINTER_DOWN:
++                touching = false;
++                scrollGesture.block(SystemClock.uptimeMillis());
++                scrollPolicy.cancel();
++                break;
 +            case MotionEvent.ACTION_UP:
 +                touching = false;
++                scrollGesture.release();
++                scheduleScrollPause();
 +                break;
 +        }
 +    }
@@ -181,12 +257,33 @@ index 0000000..1de9cfd
 +    }
 +
 +    private static final ViewTreeObserver.OnScrollChangedListener SCROLL_LISTENER = () -> {
-+        Activity activity = activityRef.get();
-+        if (started && activity != null && activity.hasWindowFocus()
-+                && SystemClock.uptimeMillis() < gestureUntil && Settings.PAUSE_ON_SCROLL.get()) {
-+            requestPause(scrollPolicy);
-+        }
++        scrollGesture.scroll(SystemClock.uptimeMillis());
++        scheduleScrollPause();
 +    };
++
++    private static boolean stablePlayer() {
++        PlayerType type = PlayerType.getCurrent();
++        return type == PlayerType.WATCH_WHILE_MAXIMIZED
++                || type == PlayerType.WATCH_WHILE_FULLSCREEN
++                || type == PlayerType.WATCH_WHILE_MINIMIZED;
++    }
++
++    private static void scheduleScrollPause() {
++        int revision = scrollGesture.revision();
++        if (scheduledScrollRevision == revision || !scrollGesture.ready(SystemClock.uptimeMillis(), revision)) return;
++        scheduledScrollRevision = revision;
++        // Wait for release and for the player transition to become visible. Resizing the
++        // player can emit scroll notifications before its PlayerType changes.
++        Utils.runOnMainThreadDelayed(() -> {
++            if (scheduledScrollRevision == revision) scheduledScrollRevision = -1;
++            Activity activity = activityRef.get();
++            if (scrollGesture.ready(SystemClock.uptimeMillis(), revision)
++                    && started && activity != null && activity.hasWindowFocus()
++                    && stablePlayer() && Settings.PAUSE_ON_SCROLL.get()) {
++                requestPause(scrollPolicy);
++            }
++        }, 250);
++    }
 +
 +    private static void detachScrollListener() {
 +        View root = rootRef.get();
@@ -211,7 +308,7 @@ index 0000000..1de9cfd
 +        @Override public void onActivityStopped(Activity activity) {
 +            if (activityRef.get() != activity) return;
 +            started = false;
-+            gestureUntil = 0;
++            scrollGesture.block(SystemClock.uptimeMillis());
 +            detachScrollListener();
 +            scrollPolicy.cancel();
 +            // Exclude configuration changes such as rotating the phone.
@@ -223,6 +320,7 @@ index 0000000..1de9cfd
 +        @Override public void onActivityDestroyed(Activity activity) {
 +            if (activityRef.get() != activity) return;
 +            started = false;
++            scrollGesture.block(SystemClock.uptimeMillis());
 +            detachScrollListener();
 +            scrollPolicy.cancel();
 +            minimisePolicy.cancel();
@@ -245,6 +343,10 @@ index 0000000..1de9cfd
 +
 +        PlayerType.getOnChange().addObserver(type -> {
 +            Utils.runOnMainThreadNowOrLater(() -> {
++                // A swipe to expand/fullscreen is a player gesture, not list scrolling.
++                // Block the whole gesture so later MOVE events cannot re-arm it.
++                scrollGesture.block(SystemClock.uptimeMillis());
++                scrollPolicy.cancel();
 +                if (Settings.PAUSE_ON_MINIMISE.get()
 +                        && (type == PlayerType.WATCH_WHILE_MINIMIZED
 +                        || type == PlayerType.WATCH_WHILE_PICTURE_IN_PICTURE)) {
@@ -260,7 +362,8 @@ index 0000000..1de9cfd
 +            Utils.runOnMainThreadNowOrLater(() -> {
 +                if (state != VideoState.PLAYING) return;
 +                long now = SystemClock.uptimeMillis();
-+                if (scrollPolicy.onPlaying(now, Settings.PAUSE_ON_SCROLL.get(), started && regularVideo())) {
++                if (scrollPolicy.onPlaying(now, Settings.PAUSE_ON_SCROLL.get(), started && regularVideo()
++                        && stablePlayer() && scrollGesture.ready(now, scrollGesture.revision()))) {
 +                    sendPause();
 +                }
 +                if (minimisePolicy.onPlaying(now, Settings.PAUSE_ON_MINIMISE.get(), regularVideo())) {
@@ -323,6 +426,54 @@ index 8941312..9666b5d 100644
  
              if (!shouldScale() || Settings.FULLSCREEN_VIDEO_SCALE.get() == VideoScaleMode.DEFAULT) {
                  detachPreDraw();
+diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollPauseGesture.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollPauseGesture.java
+new file mode 100644
+index 0000000..ff15c9c
+--- /dev/null
++++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollPauseGesture.java
+@@ -0,0 +1,42 @@
++package app.morphe.extension.youtube.patches;
++
++/** Scroll intent survives a fling, but never a player-size transition or a pinch. */
++final class ScrollPauseGesture {
++    private boolean blocked = true, moved, scrolled, released;
++    private long until, settleUntil;
++    private int revision;
++
++    void begin(long now) {
++        revision++;
++        blocked = now < settleUntil;
++        moved = scrolled = released = false;
++        until = 0;
++    }
++
++    void move(long now) {
++        if (blocked) return;
++        moved = true;
++        until = now + 1500;
++    }
++
++    void scroll(long now) {
++        if (!blocked && moved && now < until) scrolled = true;
++    }
++
++    void release() { released = true; }
++
++    void block(long now) {
++        revision++;
++        blocked = true;
++        scrolled = false;
++        until = 0;
++        settleUntil = now + 300;
++    }
++
++    int revision() { return revision; }
++
++    boolean ready(long now, int expectedRevision) {
++        return revision == expectedRevision && !blocked && moved && scrolled && released
++                && now >= settleUntil && now < until;
++    }
++}
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPatch.java
 new file mode 100644
 index 0000000..22927a6
@@ -552,7 +703,7 @@ index 6f307b9..6eacf6e 100644
      public static final EnumSetting<PlaybackBufferSize> PLAYBACK_BUFFER_SIZE = new EnumSetting<>(
              "morphe_playback_buffer_size", PlaybackBufferSize.DEFAULT, true);
 diff --git a/gradle.properties b/gradle.properties
-index 2a3d7ca..64953f2 100644
+index 2a3d7ca..334b137 100644
 --- a/gradle.properties
 +++ b/gradle.properties
 @@ -3,4 +3,4 @@ org.gradle.jvmargs = -Xms512M -Xmx2048M
@@ -560,7 +711,7 @@ index 2a3d7ca..64953f2 100644
  android.useAndroidX = true
  kotlin.code.style = official
 -version = 1.47.0
-+version = 1.47.1
++version = 1.47.2
 diff --git a/patches/build.gradle.kts b/patches/build.gradle.kts
 index 831d7ff..a989a26 100644
 --- a/patches/build.gradle.kts

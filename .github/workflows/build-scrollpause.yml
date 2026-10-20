@@ -29,6 +29,8 @@ jobs:
           java -cp custom-tests/classes app.morphe.extension.youtube.patches.AutoPausePolicyTest
           javac -d custom-tests/classes extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomScale.java custom-tests/SmoothZoomScaleTest.java
           java -cp custom-tests/classes app.morphe.extension.youtube.patches.SmoothZoomScaleTest
+          javac -d custom-tests/classes extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollPauseGesture.java custom-tests/ScrollPauseGestureTest.java
+          java -cp custom-tests/classes app.morphe.extension.youtube.patches.ScrollPauseGestureTest
       - name: Build importable patch bundle
         working-directory: upstream
         env:
