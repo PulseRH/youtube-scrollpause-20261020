@@ -106,6 +106,50 @@ index 0000000..490d9a0
 +        System.out.println("PASS: " + checks + " scroll/resize regression checks");
 +    }
 +}
+diff --git a/custom-tests/ScrollResumePolicyTest.java b/custom-tests/ScrollResumePolicyTest.java
+new file mode 100644
+index 0000000..7890fe7
+--- /dev/null
++++ b/custom-tests/ScrollResumePolicyTest.java
+@@ -0,0 +1,38 @@
++package app.morphe.extension.youtube.patches;
++
++public final class ScrollResumePolicyTest {
++    private static int checks;
++    private static void check(boolean value, String name) {
++        checks++;
++        if (!value) throw new AssertionError(name);
++    }
++    public static void main(String[] args) {
++        ScrollResumePolicy policy = new ScrollResumePolicy();
++        policy.scrolled(1000);
++        policy.paused();
++        check(!policy.consume(2000, true, true, true), "Never resume a manually paused video");
++        policy.arm(2000);
++        policy.paused();
++        check(!policy.consume(3000, false, true, true), "Default-off option cannot resume");
++        policy.scrolled(4000);
++        policy.arm(4100);
++        policy.paused();
++        check(!policy.consume(4500, true, true, true), "Wait for scrolling to stop");
++        policy.scrolled(4700);
++        check(!policy.consume(5000, true, true, true), "Fling extends idle delay");
++        check(policy.consume(5500, true, true, true), "Owned pause resumes after 800ms idle");
++        check(!policy.consume(5600, true, true, true), "Resume only once");
++        policy.arm(6000);
++        policy.paused();
++        check(!policy.consume(7000, true, false, true), "Background or player transition cancels");
++        policy.arm(8000);
++        policy.paused();
++        policy.cancel();
++        check(!policy.consume(9000, true, true, true), "Video change/manual tap cancels");
++        policy.arm(10000);
++        check(!policy.consume(11000, true, true, false), "Do not play before pause acknowledgement");
++        check(!policy.consume(13000, true, true, true), "Unacknowledged pause expires");
++        check(!policy.owned(), "No stale resume ownership after expiry");
++        System.out.println("PASS: " + checks + " scroll resume checks");
++    }
++}
 diff --git a/custom-tests/SmoothZoomScaleTest.java b/custom-tests/SmoothZoomScaleTest.java
 new file mode 100644
 index 0000000..abf6e82
@@ -145,10 +189,10 @@ index 0000000..abf6e82
 +}
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java
 new file mode 100644
-index 0000000..db5f79c
+index 0000000..885a60f
 --- /dev/null
 +++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java
-@@ -0,0 +1,225 @@
+@@ -0,0 +1,284 @@
 +package app.morphe.extension.youtube.patches;
 +
 +import android.app.Activity;
@@ -165,6 +209,7 @@ index 0000000..db5f79c
 +import android.view.ViewTreeObserver;
 +
 +import java.lang.ref.WeakReference;
++import java.util.Objects;
 +
 +import app.morphe.extension.shared.Logger;
 +import app.morphe.extension.shared.Utils;
@@ -188,6 +233,10 @@ index 0000000..db5f79c
 +    private static boolean touching;
 +    private static final ScrollPauseGesture scrollGesture = new ScrollPauseGesture();
 +    private static int scheduledScrollRevision = -1;
++    private static final ScrollResumePolicy resumePolicy = new ScrollResumePolicy();
++    private static boolean resumeCheckScheduled;
++    private static boolean touchMoved;
++    private static String videoId;
 +
 +    /** Injection point. Observes a gesture; never consumes or changes a touch event. */
 +    public static void onTouchEvent(MotionEvent event) {
@@ -197,6 +246,7 @@ index 0000000..db5f79c
 +                downX = event.getX();
 +                downY = event.getY();
 +                touching = true;
++                touchMoved = false;
 +                scrollGesture.begin(SystemClock.uptimeMillis());
 +                scrollPolicy.cancel();
 +                break;
@@ -204,6 +254,7 @@ index 0000000..db5f79c
 +                if (touching && (Math.abs(event.getX() - downX) > touchSlop
 +                        || Math.abs(event.getY() - downY) > touchSlop)) {
 +                    scrollGesture.move(SystemClock.uptimeMillis());
++                    touchMoved = true;
 +                }
 +                break;
 +            case MotionEvent.ACTION_CANCEL:
@@ -211,9 +262,11 @@ index 0000000..db5f79c
 +                touching = false;
 +                scrollGesture.block(SystemClock.uptimeMillis());
 +                scrollPolicy.cancel();
++                resumePolicy.cancel();
 +                break;
 +            case MotionEvent.ACTION_UP:
 +                touching = false;
++                if (!touchMoved) resumePolicy.cancel(); // A control tap is manual intent.
 +                scrollGesture.release();
 +                scheduleScrollPause();
 +                break;
@@ -231,32 +284,73 @@ index 0000000..db5f79c
 +        if (!regularVideo() || VideoState.getCurrent() == VideoState.PAUSED
 +                || VideoState.getCurrent() == VideoState.ENDED) return;
 +        if (policy.request(SystemClock.uptimeMillis(), VideoState.getCurrent() == VideoState.PLAYING)) {
-+            sendPause();
++            issuePause(policy);
 +        }
 +    }
 +
-+    private static void sendPause() {
++    private static void issuePause(AutoPausePolicy policy) {
++        boolean resume = policy == scrollPolicy && Settings.RESUME_AFTER_SCROLL.get();
++        if (resume) resumePolicy.arm(SystemClock.uptimeMillis());
++        if (!sendMediaCommand(true) && resume) resumePolicy.cancel();
++        if (resume) scheduleResume();
++    }
++
++    private static boolean sendMediaCommand(boolean pause) {
 +        try {
 +            Activity activity = activityRef.get();
-+            if (activity == null) return;
++            if (activity == null) return false;
 +            MediaController controller = activity.getMediaController();
 +            if (controller != null) {
 +                // Prefer an explicitly associated session, so another app cannot receive the command.
-+                controller.getTransportControls().pause();
-+                return;
++                if (pause) controller.getTransportControls().pause();
++                else controller.getTransportControls().play();
++                return true;
 +            }
 +            // Same pause-only media command used by upstream's pause-on-screen-lock feature.
 +            AudioManager audio = (AudioManager) activity.getSystemService(Context.AUDIO_SERVICE);
-+            if (audio == null || !audio.isMusicActive()) return;
++            if (audio == null || (pause && !audio.isMusicActive()) || (!pause && audio.isMusicActive())) return false;
 +            long now = SystemClock.uptimeMillis();
-+            audio.dispatchMediaKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PAUSE, 0));
-+            audio.dispatchMediaKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PAUSE, 0));
++            int key = pause ? KeyEvent.KEYCODE_MEDIA_PAUSE : KeyEvent.KEYCODE_MEDIA_PLAY;
++            audio.dispatchMediaKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, key, 0));
++            audio.dispatchMediaKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_UP, key, 0));
++            return true;
 +        } catch (Exception ex) {
-+            Logger.printException(() -> "Auto-pause failed", ex);
++            Logger.printException(() -> "Auto-pause/resume failed", ex);
++            return false;
 +        }
 +    }
 +
++    private static void scheduleResume() {
++        if (resumeCheckScheduled || !resumePolicy.owned()) return;
++        resumeCheckScheduled = true;
++        Utils.runOnMainThreadDelayed(() -> {
++            resumeCheckScheduled = false;
++            Activity activity = activityRef.get();
++            boolean eligible = started && activity != null && activity.hasWindowFocus()
++                    && regularVideo() && stablePlayer() && Settings.PAUSE_ON_SCROLL.get();
++            if (touching && eligible && Settings.RESUME_AFTER_SCROLL.get()) {
++                scheduleResume();
++                return;
++            }
++            if (resumePolicy.consume(SystemClock.uptimeMillis(), Settings.RESUME_AFTER_SCROLL.get(),
++                    eligible, VideoState.getCurrent() == VideoState.PAUSED)) {
++                sendMediaCommand(false);
++            }
++            scheduleResume();
++        }, touching ? 100 : resumePolicy.delay(SystemClock.uptimeMillis()));
++    }
++
++    public static void onVideoChanged(String id) {
++        Utils.runOnMainThreadNowOrLater(() -> {
++            if (!Objects.equals(videoId, id)) {
++                videoId = id;
++                resumePolicy.cancel();
++            }
++        });
++    }
++
 +    private static final ViewTreeObserver.OnScrollChangedListener SCROLL_LISTENER = () -> {
++        resumePolicy.scrolled(SystemClock.uptimeMillis());
 +        scrollGesture.scroll(SystemClock.uptimeMillis());
 +        scheduleScrollPause();
 +    };
@@ -308,6 +402,7 @@ index 0000000..db5f79c
 +        @Override public void onActivityStopped(Activity activity) {
 +            if (activityRef.get() != activity) return;
 +            started = false;
++            resumePolicy.cancel();
 +            scrollGesture.block(SystemClock.uptimeMillis());
 +            detachScrollListener();
 +            scrollPolicy.cancel();
@@ -320,6 +415,7 @@ index 0000000..db5f79c
 +        @Override public void onActivityDestroyed(Activity activity) {
 +            if (activityRef.get() != activity) return;
 +            started = false;
++            resumePolicy.cancel();
 +            scrollGesture.block(SystemClock.uptimeMillis());
 +            detachScrollListener();
 +            scrollPolicy.cancel();
@@ -347,6 +443,7 @@ index 0000000..db5f79c
 +                // Block the whole gesture so later MOVE events cannot re-arm it.
 +                scrollGesture.block(SystemClock.uptimeMillis());
 +                scrollPolicy.cancel();
++                resumePolicy.cancel();
 +                if (Settings.PAUSE_ON_MINIMISE.get()
 +                        && (type == PlayerType.WATCH_WHILE_MINIMIZED
 +                        || type == PlayerType.WATCH_WHILE_PICTURE_IN_PICTURE)) {
@@ -360,14 +457,20 @@ index 0000000..db5f79c
 +
 +        VideoState.getOnChange().addObserver(state -> {
 +            Utils.runOnMainThreadNowOrLater(() -> {
++                if (state == VideoState.PAUSED) {
++                    resumePolicy.paused();
++                    scheduleResume();
++                } else if (state != VideoState.PLAYING || resumePolicy.owned()) {
++                    resumePolicy.cancel();
++                }
 +                if (state != VideoState.PLAYING) return;
 +                long now = SystemClock.uptimeMillis();
 +                if (scrollPolicy.onPlaying(now, Settings.PAUSE_ON_SCROLL.get(), started && regularVideo()
 +                        && stablePlayer() && scrollGesture.ready(now, scrollGesture.revision()))) {
-+                    sendPause();
++                    issuePause(scrollPolicy);
 +                }
 +                if (minimisePolicy.onPlaying(now, Settings.PAUSE_ON_MINIMISE.get(), regularVideo())) {
-+                    sendPause();
++                    issuePause(minimisePolicy);
 +                }
 +            });
 +            return Unit.INSTANCE;
@@ -472,6 +575,33 @@ index 0000000..ff15c9c
 +    boolean ready(long now, int expectedRevision) {
 +        return revision == expectedRevision && !blocked && moved && scrolled && released
 +                && now >= settleUntil && now < until;
++    }
++}
+diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollResumePolicy.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollResumePolicy.java
+new file mode 100644
+index 0000000..00e87e4
+--- /dev/null
++++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollResumePolicy.java
+@@ -0,0 +1,21 @@
++package app.morphe.extension.youtube.patches;
++
++/** Only owns pauses explicitly issued by scroll-to-pause, never pre-existing pauses. */
++final class ScrollResumePolicy {
++    private boolean owned, acknowledged;
++    private long lastScroll, armedAt;
++
++    void scrolled(long now) { lastScroll = now; }
++    void arm(long now) { owned = true; acknowledged = false; armedAt = now; }
++    void paused() { if (owned) acknowledged = true; }
++    void cancel() { owned = acknowledged = false; }
++    boolean owned() { return owned; }
++    long delay(long now) { return acknowledged ? Math.max(1, 800 - (now - lastScroll)) : 100; }
++
++    boolean consume(long now, boolean enabled, boolean eligible, boolean paused) {
++        if (!enabled || !eligible || (!acknowledged && now - armedAt > 2000)) cancel();
++        if (!owned || !acknowledged || !paused || now - lastScroll < 800) return false;
++        cancel();
++        return true;
 +    }
 +}
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPatch.java
@@ -687,10 +817,10 @@ index 0000000..94d9b9a
 +    void reset() { scale = 1f; }
 +}
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java
-index 6f307b9..6eacf6e 100644
+index 6f307b9..b5b608b 100644
 --- a/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java
 +++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/settings/Settings.java
-@@ -83,6 +83,11 @@ import app.morphe.extension.youtube.videoplayer.PlayAllButton.PlaylistIDPrefix;
+@@ -83,6 +83,13 @@ import app.morphe.extension.youtube.videoplayer.PlayAllButton.PlaylistIDPrefix;
  import app.morphe.extension.youtube.videoplayer.PlayerIcons;
  
  public class Settings extends SharedYouTubeSettings {
@@ -699,11 +829,13 @@ index 6f307b9..6eacf6e 100644
 +
 +    public static final BooleanSetting SMOOTH_PINCH_ZOOM = new BooleanSetting("morphe_smooth_pinch_zoom", TRUE);
 +
++    public static final BooleanSetting RESUME_AFTER_SCROLL = new BooleanSetting("morphe_resume_after_scroll", FALSE);
++
      // Video
      public static final EnumSetting<PlaybackBufferSize> PLAYBACK_BUFFER_SIZE = new EnumSetting<>(
              "morphe_playback_buffer_size", PlaybackBufferSize.DEFAULT, true);
 diff --git a/gradle.properties b/gradle.properties
-index 2a3d7ca..334b137 100644
+index 2a3d7ca..5bd82ab 100644
 --- a/gradle.properties
 +++ b/gradle.properties
 @@ -3,4 +3,4 @@ org.gradle.jvmargs = -Xms512M -Xmx2048M
@@ -711,7 +843,7 @@ index 2a3d7ca..334b137 100644
  android.useAndroidX = true
  kotlin.code.style = official
 -version = 1.47.0
-+version = 1.47.2
++version = 1.47.3
 diff --git a/patches/build.gradle.kts b/patches/build.gradle.kts
 index 831d7ff..a989a26 100644
 --- a/patches/build.gradle.kts
@@ -729,10 +861,10 @@ index 831d7ff..a989a26 100644
          contact = "na"
 diff --git a/patches/src/main/kotlin/app/morphe/patches/youtube/interaction/autopause/AutoPausePatch.kt b/patches/src/main/kotlin/app/morphe/patches/youtube/interaction/autopause/AutoPausePatch.kt
 new file mode 100644
-index 0000000..77cca38
+index 0000000..a04232a
 --- /dev/null
 +++ b/patches/src/main/kotlin/app/morphe/patches/youtube/interaction/autopause/AutoPausePatch.kt
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,76 @@
 +package app.morphe.patches.youtube.interaction.autopause
 +
 +import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
@@ -746,6 +878,8 @@ index 0000000..77cca38
 +import app.morphe.patches.youtube.misc.settings.settingsPatch
 +import app.morphe.patches.youtube.shared.Constants.COMPATIBILITY_YOUTUBE
 +import app.morphe.patches.youtube.shared.YouTubeActivityOnCreateFingerprint
++import app.morphe.patches.youtube.video.videoid.hookVideoId
++import app.morphe.patches.youtube.video.videoid.videoIdPatch
 +import com.android.tools.smali.dexlib2.AccessFlags
 +import com.android.tools.smali.dexlib2.builder.MutableMethodImplementation
 +import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
@@ -761,13 +895,15 @@ index 0000000..77cca38
 +        "entering picture-in-picture, or sending YouTube to the background.",
 +) {
 +    compatibleWith(COMPATIBILITY_YOUTUBE)
-+    dependsOn(settingsPatch, addResourcesPatch, playerTypeHookPatch)
++    dependsOn(settingsPatch, addResourcesPatch, playerTypeHookPatch, videoIdPatch)
 +
 +    execute {
 +        PreferenceScreen.VIDEO.addPreferences(
 +            SwitchPreference("morphe_pause_on_scroll", summary = true),
 +            SwitchPreference("morphe_pause_on_minimise", summary = true),
++            SwitchPreference("morphe_resume_after_scroll", summary = true),
 +        )
++        hookVideoId("$EXTENSION_CLASS->onVideoChanged(Ljava/lang/String;)V")
 +        // Register lifecycle callbacks here; do not create a window before Activity.onCreate.
 +        YouTubeActivityOnCreateFingerprint.method.addInstruction(
 +            0,
@@ -807,14 +943,16 @@ index 0000000..77cca38
 +}
 diff --git a/patches/src/main/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomPatch.kt b/patches/src/main/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomPatch.kt
 new file mode 100644
-index 0000000..9844201
+index 0000000..559ecb5
 --- /dev/null
 +++ b/patches/src/main/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomPatch.kt
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,75 @@
 +package app.morphe.patches.youtube.layout.player.fullscreen
 +
 +import app.morphe.patcher.extensions.InstructionExtensions.addInstructionsWithLabels
 +import app.morphe.patcher.patch.bytecodePatch
++import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod
++import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod.Companion.toMutable
 +import app.morphe.patches.all.misc.resources.addResourcesPatch
 +import app.morphe.patches.shared.misc.settings.preference.SwitchPreference
 +import app.morphe.patches.youtube.misc.settings.PreferenceScreen
@@ -822,8 +960,10 @@ index 0000000..9844201
 +import app.morphe.patches.youtube.video.videoid.hookVideoId
 +import app.morphe.patches.youtube.video.videoid.videoIdPatch
 +import app.morphe.util.addInstructionsAtControlFlowLabel
-+import app.morphe.util.findFreeRegister
++import app.morphe.util.cloneMutable
 +import app.morphe.util.setExtensionIsPatchIncluded
++import com.android.tools.smali.dexlib2.builder.MutableMethodImplementation
++import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
 +
 +private const val SMOOTH_ZOOM = "Lapp/morphe/extension/youtube/patches/SmoothZoomPatch;"
 +
@@ -850,29 +990,43 @@ index 0000000..9844201
 +            val method = VideoZoomScaleBeginFingerprint.classDef.methods.single {
 +                it.name == name && it.parameterTypes == listOf("Landroid/view/ScaleGestureDetector;")
 +            }
-+            val count = method.implementation!!.registerCount
-+            val scratch = method.findFreeRegister(0, count - 2, count - 1)
-+            val result = if (name == "onScaleEnd") {
-+                "invoke-static/range { p1 .. p1 }, $SMOOTH_ZOOM->$name(Landroid/view/ScaleGestureDetector;)V\nreturn-void"
-+            } else {
-+                "invoke-static/range { p1 .. p1 }, $SMOOTH_ZOOM->$name(Landroid/view/ScaleGestureDetector;)Z\nmove-result v$scratch\nreturn v$scratch"
++            val (native, wrapper) = wrapSmoothZoomCallback(method)
++            VideoZoomScaleBeginFingerprint.classDef.methods.apply {
++                remove(method)
++                add(native)
++                add(wrapper)
 +            }
-+            method.addInstructionsWithLabels(0, """
-+                invoke-static { }, $SMOOTH_ZOOM->isEnabled()Z
-+                move-result v$scratch
-+                if-eqz v$scratch, :native_zoom
-+                $result
-+                :native_zoom
-+                nop
-+            """)
 +        }
 +    }
 +}
++
++/** Own wrapper frame: works even for onScaleEnd implementations with only p0/p1. */
++internal fun wrapSmoothZoomCallback(method: MutableMethod): Pair<MutableMethod, MutableMethod> {
++    val native = method.cloneMutable(name = "scrollPauseNative_${method.name}")
++    val wrapper = ImmutableMethod(
++        method.definingClass, method.name, method.parameters, method.returnType,
++        method.accessFlags, method.annotations, method.hiddenApiRestrictions,
++        MutableMethodImplementation(3), // v0 scratch; p0=v1, p1=v2.
++    ).toMutable()
++    val returnsVoid = method.returnType == "V"
++    val finish = if (returnsVoid) "return-void" else "move-result v0\nreturn v0"
++    wrapper.addInstructionsWithLabels(0, """
++        invoke-static { }, $SMOOTH_ZOOM->isEnabled()Z
++        move-result v0
++        if-eqz v0, :native_zoom
++        invoke-static { p1 }, $SMOOTH_ZOOM->${method.name}(Landroid/view/ScaleGestureDetector;)${method.returnType}
++        $finish
++        :native_zoom
++        invoke-virtual { p0, p1 }, ${method.definingClass}->${native.name}(Landroid/view/ScaleGestureDetector;)${method.returnType}
++        $finish
++    """)
++    return native to wrapper
++}
 diff --git a/patches/src/main/resources/addresources/values/youtube/strings.xml b/patches/src/main/resources/addresources/values/youtube/strings.xml
-index d64eb6c..e540d1c 100644
+index d64eb6c..572d3bf 100644
 --- a/patches/src/main/resources/addresources/values/youtube/strings.xml
 +++ b/patches/src/main/resources/addresources/values/youtube/strings.xml
-@@ -1498,4 +1498,10 @@ Limitation: Reverts to old style \'More videos\' overlay"</string>
+@@ -1498,4 +1498,12 @@ Limitation: Reverts to old style \'More videos\' overlay"</string>
      <string name="morphe_player_icon_style_entry_sharp" translatable="false">Sharp</string>
      <string name="morphe_player_icon_style_entry_custom">Custom</string>
      <string name="morphe_shorts_icon_style_title">Shorts icon style</string>
@@ -882,4 +1036,54 @@ index d64eb6c..e540d1c 100644
 +    <string name="morphe_pause_on_minimise_summary">Pause regular videos on entering the mini-player, picture-in-picture, or the background. Resume playback manually.</string>
 +    <string name="morphe_smooth_pinch_zoom_title">Smooth pinch zoom</string>
 +    <string name="morphe_smooth_pinch_zoom_summary">Zoom continuously from 1x to 8x without snapping to fill. Overrides fullscreen stretch and fill while enabled. Disable YouTube zoom to fill for a fitted starting image. Restart the video after changing this setting.</string>
++    <string name="morphe_resume_after_scroll_title">Resume when scrolling stops</string>
++    <string name="morphe_resume_after_scroll_summary">Resume videos paused by scrolling after 0.8 seconds without scrolling. Does not resume videos paused by minimising or manual controls. Off by default.</string>
  </resources>
+diff --git a/patches/src/test/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomCallbackTest.kt b/patches/src/test/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomCallbackTest.kt
+new file mode 100644
+index 0000000..0f17ba7
+--- /dev/null
++++ b/patches/src/test/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomCallbackTest.kt
+@@ -0,0 +1,42 @@
++package app.morphe.patches.youtube.layout.player.fullscreen
++
++import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
++import app.morphe.patcher.util.proxy.mutableTypes.MutableMethod.Companion.toMutable
++import com.android.tools.smali.dexlib2.AccessFlags
++import com.android.tools.smali.dexlib2.builder.MutableMethodImplementation
++import com.android.tools.smali.dexlib2.iface.instruction.FiveRegisterInstruction
++import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
++import com.android.tools.smali.dexlib2.iface.reference.MethodReference
++import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
++import com.android.tools.smali.dexlib2.immutable.ImmutableMethodParameter
++import kotlin.test.Test
++import kotlin.test.assertEquals
++import kotlin.test.assertTrue
++
++class SmoothZoomCallbackTest {
++    @Test fun `two register void callback needs no free register`() = verify("onScaleEnd", "V", 2)
++    @Test fun `boolean scale callback keeps native fallback`() = verify("onScale", "Z", 3)
++    @Test fun `begin callback keeps native fallback`() = verify("onScaleBegin", "Z", 3)
++
++    private fun verify(name: String, returnType: String, registers: Int) {
++        val original = ImmutableMethod(
++            "Ltest/Zoom;", name,
++            listOf(ImmutableMethodParameter("Landroid/view/ScaleGestureDetector;", null, null)),
++            returnType, AccessFlags.PUBLIC.value or AccessFlags.FINAL.value, null, null,
++            MutableMethodImplementation(registers),
++        ).toMutable().apply {
++            addInstructions(0, if (returnType == "V") "return-void" else "const/4 v0, 0x1\nreturn v0")
++        }
++        val (native, wrapper) = wrapSmoothZoomCallback(original)
++        assertEquals(registers, native.implementation!!.registerCount)
++        assertEquals(3, wrapper.implementation!!.registerCount)
++        assertEquals(name, wrapper.name)
++        assertEquals(original.implementation!!.instructions.map { it.opcode }, native.implementation!!.instructions.map { it.opcode })
++        val fallback = wrapper.implementation!!.instructions.filterIsInstance<ReferenceInstruction>().single {
++            (it.reference as? MethodReference)?.name == native.name
++        } as FiveRegisterInstruction
++        assertEquals(1, fallback.registerC, "p0 must survive the enable check")
++        assertEquals(2, fallback.registerD, "p1 must survive the enable check")
++        assertTrue(native.name != wrapper.name)
++    }
++}

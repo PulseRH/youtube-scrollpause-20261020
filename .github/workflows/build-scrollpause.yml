@@ -31,11 +31,13 @@ jobs:
           java -cp custom-tests/classes app.morphe.extension.youtube.patches.SmoothZoomScaleTest
           javac -d custom-tests/classes extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollPauseGesture.java custom-tests/ScrollPauseGestureTest.java
           java -cp custom-tests/classes app.morphe.extension.youtube.patches.ScrollPauseGestureTest
+          javac -d custom-tests/classes extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/ScrollResumePolicy.java custom-tests/ScrollResumePolicyTest.java
+          java -cp custom-tests/classes app.morphe.extension.youtube.patches.ScrollResumePolicyTest
       - name: Build importable patch bundle
         working-directory: upstream
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./gradlew :patches:buildAndroid --no-daemon --console=plain
+        run: ./gradlew :patches:test --tests app.morphe.patches.youtube.layout.player.fullscreen.SmoothZoomCallbackTest :patches:buildAndroid --no-daemon --console=plain
       - uses: actions/upload-artifact@v7
         with:
           name: ScrollPause-patch-bundle
