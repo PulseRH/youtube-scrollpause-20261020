@@ -1,6 +1,6 @@
 # ScrollPause custom patch source for Morphe
 
-Custom source changes prepared 20 October 2026. This is an unofficial modification of Morphe Patches. This folder contains the reproducible source; the separately supplied `ScrollPause-1.47.4.mpp` is the compiled importable bundle.
+Custom source changes prepared 20 October 2026. This is an unofficial modification of Morphe Patches. This folder contains the reproducible source; the separately supplied `ScrollPause-1.47.5.mpp` is the compiled importable bundle.
 
 ## Remote import
 
@@ -23,6 +23,14 @@ Select **Pause on scroll or minimise** when patching. In YouTube â†’ Settings â†
 - Resuming playback is manual by default. The optional Resume when scrolling stops switch is off by default. Videos that were already paused remain paused. Shorts and inline feed previews are excluded.
 - A brief pending request handles buffering during the trigger. Requests expire after 1.5 seconds. Pause events are rate limited during a fling.
 - Pause uses the activity's media controller when available, otherwise the same Android pause-only media-key mechanism as upstream's screen-lock pause feature. Casting and interactions with other media apps require device verification.
+
+### Pause during held list drags (1.47.5)
+
+Confirmed RecyclerView list touches plus scrolling now select an immediate pause path, without waiting for finger release. The existing player-type, parent-interception, pinch, and panning exclusions remain. Unrecognised scroll sources retain the conservative release-plus-250-ms fallback. New video changes also clear the gesture confirmation and queued scroll pause.
+
+No new setting is needed. The optional resume switch remains off by default; when enabled it still waits for finger release and scroll inactivity. All zoom, HUD, and bounded panning features remain included.
+
+Full Android build, 73 standalone policy/geometry checks, and 5 bytecode tests passed: https://github.com/PulseRH/youtube-scrollpause-20261020/actions/runs/39482030375 . Real APK and device behaviour still require confirmation, particularly held feed/comment scrolling versus swipe-to-maximise.
 
 ### Brief percentage display and panning (1.47.4)
 

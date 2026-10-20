@@ -1,3 +1,25 @@
+# [1.47.5](https://github.com/PulseRH/youtube-scrollpause-20261020/releases/tag/v1.47.5-scrollpause.1) (2026-10-20)
+
+Improves **Pause on scroll or minimise** so confirmed list scrolling can pause a video while the finger is still down, without removing the player-resize protections.
+
+The patch now observes touches delivered to YouTube's RecyclerView lists. When a single-finger list drag produces a real scroll notification, it uses the immediate pause path rather than waiting for release. Player transitions, parent touch interception, pinches, cropped-video panning, and video changes cancel list confirmation and pending scroll pauses.
+
+Unknown scroll sources retain the conservative release-plus-250-ms fallback. This is intended to improve feed/comment list drags while retaining the swipe-to-maximise fix; phone confirmation is still required.
+
+Smooth zoom, the brief percentage label, bounded panning, pause-on-minimise, and the default-off **Resume when scrolling stops** option remain included. If resume is enabled, it still waits for finger release and scroll inactivity before resuming a scroll-owned pause.
+
+## Update
+
+Update the ScrollPause source to **1.47.5**, confirm that version is selected, and repatch your original **YouTube 21.20.405** APK using the ScrollPause source. Keep **Pause on scroll or minimise** selected, plus **Smooth pinch zoom** if wanted. Updating the source alone does not alter the installed YouTube APK.
+
+## Validation
+
+Full Android build passed, along with 73 standalone policy/geometry checks and 5 bytecode wrapper tests. The 21 scroll/resize checks include immediate pause before release for a confirmed list, cancellation on resize/interception, and preservation of the conservative path for unconfirmed gestures. The source uses a framework onTouchEvent override with no added scratch-register requirement.
+
+These checks do not establish real YouTube APK or Android touch behaviour. Please verify holding-and-scrolling in the feed/comments, swiping up to maximise, pinch/pan, minimising, and optional resume on your phone.
+
+Unofficial derivative of Morphe Patches 1.47.0. Source changes, pinned upstream revision, reproducible build/test workflow, GPLv3 licence and Section 7 notices are included. No YouTube APK is included.
+
 # [1.47.4](https://github.com/PulseRH/youtube-scrollpause-20261020/releases/tag/v1.47.4-scrollpause.1) (2026-10-20)
 
 Enhances **Smooth pinch zoom** with a brief zoom label and bounded drag-to-pan, while retaining continuous 1×–8× zoom without the native snap to fill.

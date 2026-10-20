@@ -1,20 +1,19 @@
-Enhances **Smooth pinch zoom** with a brief zoom label and bounded drag-to-pan, while retaining continuous 1×–8× zoom without the native snap to fill.
+Improves **Pause on scroll or minimise** so confirmed list scrolling can pause a video while the finger is still down, without removing the player-resize protections.
 
-- Shows a label such as **1.1× · 110%** during zoom and pan, then hides it after about 0.9 seconds without movement.
-- Drag with one finger to pan when video content is cropped. Movement is clamped to the actual video edges; axes that are not cropped stay centred. The bottom control strip remains available for seekbar interaction.
-- Taps and multi-touch gestures continue to the player. A real pan cancels the prior view touch stream and is excluded from scroll-to-pause/resume. Two-finger pinch can resume after a pan.
-- Leaving fullscreen, changing videos, zooming back to 1×, or disabling the feature restores the view transform and clears panning offsets. The label clears on fullscreen exit/video change.
+The patch now observes touches delivered to YouTube's RecyclerView lists. When a single-finger list drag produces a real scroll notification, it uses the immediate pause path rather than waiting for release. Player transitions, parent touch interception, pinches, cropped-video panning, and video changes cancel list confirmation and pending scroll pauses.
 
-The register-safe callback fix, swipe-to-expand pause fix, and **Resume when scrolling stops** option remain included. Automatic scroll resume still defaults to **off**.
+Unknown scroll sources retain the conservative release-plus-250-ms fallback. This is intended to improve feed/comment list drags while retaining the swipe-to-maximise fix; phone confirmation is still required.
 
-## Install
+Smooth zoom, the brief percentage label, bounded panning, pause-on-minimise, and the default-off **Resume when scrolling stops** option remain included. If resume is enabled, it still waits for finger release and scroll inactivity before resuming a scroll-owned pause.
 
-Update your ScrollPause source to **1.47.4**, confirm that version is selected, and repatch an original **YouTube 21.20.405** APK. Select **Smooth pinch zoom** and the pause patch if wanted. Updating the source alone does not change the installed YouTube APK.
+## Update
 
-Keep YouTube's **Zoom to fill** and Morphe's **Disable pinch-to-zoom gesture** off. Reopen the video after changing zoom settings. The percentage is relative to the fitted starting image. Pan follows the finger; kinetic fling panning is not implemented.
+Update the ScrollPause source to **1.47.5**, confirm that version is selected, and repatch your original **YouTube 21.20.405** APK using the ScrollPause source. Keep **Pause on scroll or minimise** selected, plus **Smooth pinch zoom** if wanted. Updating the source alone does not alter the installed YouTube APK.
 
 ## Validation
 
-Full Android build and all 63 standalone policy/geometry checks plus 5 bytecode wrapper regression tests passed. The published bundle was checked for the panning extension and its checksum verified. These tests do not establish real APK or Android device behaviour; please confirm zoom, the transient label, panning, seekbar access, and pinch-after-pan on your phone.
+Full Android build passed, along with 73 standalone policy/geometry checks and 5 bytecode wrapper tests. The 21 scroll/resize checks include immediate pause before release for a confirmed list, cancellation on resize/interception, and preservation of the conservative path for unconfirmed gestures. The source uses a framework onTouchEvent override with no added scratch-register requirement.
 
-This is an unofficial derivative of Morphe Patches 1.47.0. Source changes, pinned upstream revision, reproducible build/test workflow, GPLv3 licence and Section 7 notices are provided. No YouTube APK is included.
+These checks do not establish real YouTube APK or Android touch behaviour. Please verify holding-and-scrolling in the feed/comments, swiping up to maximise, pinch/pan, minimising, and optional resume on your phone.
+
+Unofficial derivative of Morphe Patches 1.47.0. Source changes, pinned upstream revision, reproducible build/test workflow, GPLv3 licence and Section 7 notices are included. No YouTube APK is included.
