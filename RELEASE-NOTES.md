@@ -1,17 +1,17 @@
-Adds **Smooth pinch zoom**, alongside **Pause on scroll or minimise**.
+Fixes **Pause on scroll or minimise** pausing the video during an upward swipe to expand the mini-player or enter fullscreen.
 
-Smooth pinch zoom replaces YouTube's native fullscreen pinch callbacks. Zoom increases continuously from 1× through 1.1×, 1.2× and higher, up to 8×, without a fit/fill snap during the gesture or on release. Zoom is centered and resets on fullscreen exit or changing videos. Native zoom HUD and drag-to-pan are not implemented.
+Scroll-to-pause now waits until the finger is released, then allows 250 ms for player-size changes to be reported. A player-type change cancels the queued scroll pause and blocks the remainder of that gesture. Pinches and cancelled touches are excluded. Actual minimising/backgrounding still uses its separate pause path.
 
-## Install
+Ordinary list scrolling still pauses playback shortly after release. Smooth pinch zoom and the existing pause settings remain included.
 
-Update the ScrollPause source in Morphe Manager, then repatch an original **YouTube 21.20.405** APK. Select **Smooth pinch zoom**. In YouTube → Settings → Morphe → Video, the new setting defaults to on.
+## Update
 
-Turn off YouTube's built-in **Zoom to fill** setting and reopen the video for a fitted 1× starting image. Keep **Disable pinch-to-zoom gesture** off. While smooth zoom is enabled it overrides Morphe's fullscreen stretch/fill and restore-pinch workaround. Reopen the video after changing the setting.
+In Morphe Manager → Sources, update **ScrollPause custom patches** to **1.47.2**, then repatch your original **YouTube 21.20.405** APK using that source. Updating the source alone does not change the installed YouTube APK.
 
-The prior pause patch is retained. This bundle includes upstream patches, so use ScrollPause as your YouTube source. Requires patcher 1.14.0 or newer. YouTube 21.04.223 is not supported by the pinned upstream source.
+Keep **Pause on scroll or minimise** selected and keep **Smooth pinch zoom** selected if wanted. Existing settings can remain as they are.
 
 ## Validation
 
-Full Android build passed. All 25 standalone checks passed (14 smooth zoom, 11 pause policy). The custom patch and extension classes were verified in the compiled bundle. APK patching and actual Android device behaviour remain unverified; treat this as an experimental custom feature until tested on your phone.
+All 36 standalone checks passed: 11 pause-policy, 14 smooth-zoom, and 11 new scroll/player-resize regression checks. The Android build passed. The fix still needs confirmation on the user's phone; the reported device interaction was reproduced as gesture-policy event sequences, not on an Android device here.
 
-Source changes, pinned upstream revision, reproducible build workflow, GPLv3 licence and Section 7 notices are included. This is an unofficial derivative of Morphe Patches 1.47.0. No YouTube APK is included.
+This is an unofficial custom derivative of Morphe Patches 1.47.0. Source changes, pinned upstream revision, reproducible build workflow, GPLv3 licence and Section 7 notices are included. No YouTube APK is included.

@@ -1,6 +1,6 @@
 # ScrollPause custom patch source for Morphe
 
-Custom source changes prepared 20 October 2026. This is an unofficial modification of Morphe Patches. This folder contains the reproducible source; the separately supplied `ScrollPause-1.47.1.mpp` is the compiled importable bundle.
+Custom source changes prepared 20 October 2026. This is an unofficial modification of Morphe Patches. This folder contains the reproducible source; the separately supplied `ScrollPause-1.47.2.mpp` is the compiled importable bundle.
 
 ## Remote import
 
@@ -23,6 +23,12 @@ Select **Pause on scroll or minimise** when patching. In YouTube â†’ Settings â†
 - Resuming playback is manual. Paused videos remain paused. Shorts and inline feed previews are excluded.
 - A brief pending request handles buffering during the trigger. Requests expire after 1.5 seconds. Pause events are rate limited during a fling.
 - Pause uses the activity's media controller when available, otherwise the same Android pause-only media-key mechanism as upstream's screen-lock pause feature. Casting and interactions with other media apps require device verification.
+
+### Player resize gesture fix (1.47.2)
+
+Scroll-to-pause now waits for finger release and a 250 ms transition window. Player-type changes cancel the queued pause and exclude the rest of that gesture, preventing resize/fullscreen swipes from being treated as scrolling. Pinches and cancelled touches are excluded too. The separate pause-on-minimise path remains unchanged.
+
+Ordinary list scrolling pauses shortly after release. Update the source and **repatch YouTube** to install the fix. All 36 standalone checks and the full Android build passed: https://github.com/PulseRH/youtube-scrollpause-20261020/actions/runs/39413062114 . Device confirmation remains outstanding.
 
 ### Smooth pinch zoom (1.47.1)
 
