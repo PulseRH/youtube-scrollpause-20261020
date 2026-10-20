@@ -1,6 +1,6 @@
 # ScrollPause custom patch source for Morphe
 
-Custom source changes prepared 20 October 2026. This is an unofficial modification of Morphe Patches. This folder contains the reproducible source; the separately supplied `ScrollPause-1.47.0.mpp` is the compiled importable bundle.
+Custom source changes prepared 20 October 2026. This is an unofficial modification of Morphe Patches. This folder contains the reproducible source; the separately supplied `ScrollPause-1.47.1.mpp` is the compiled importable bundle.
 
 ## Remote import
 
@@ -32,7 +32,7 @@ Turn off YouTube's own **Zoom to fill** option for a fitted 1× starting image, 
 
 The earlier **Pause on scroll or minimise** patch remains in the bundle. Pinch gestures alone do not trigger its scroll observer; an Android view must actually report scrolling.
 
-The new scale model passed 14 standalone checks. Full Android build is pending for this revision, and APK/device verification remains outstanding.
+The new scale model passed 14 standalone checks and the 11 pause checks still pass. Full Android build passed: https://github.com/PulseRH/youtube-scrollpause-20261020/actions/runs/39412163566 . Both custom features were verified inside the compiled bundle. APK/device verification remains outstanding.
 
 ## Compatibility
 
