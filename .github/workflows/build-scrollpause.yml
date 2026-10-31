@@ -17,7 +17,7 @@ jobs:
         run: |
           git init upstream
           git -C upstream remote add origin https://github.com/MorpheApp/morphe-patches.git
-          git -C upstream fetch --depth 1 origin e5464395441e916b643af4e2175c4e253e6df487
+          git -C upstream fetch --depth 1 origin 6cb8e6b6ee425eda8a854e026507286359f38a32
           git -C upstream checkout --detach FETCH_HEAD
           git -C upstream apply --check ../scrollpause.patch
           git -C upstream apply ../scrollpause.patch

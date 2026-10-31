@@ -4,7 +4,7 @@ if (Test-Path -LiteralPath $target) { throw 'The upstream folder already exists.
 git init $target
 if ($LASTEXITCODE) { throw 'git init failed' }
 git -C $target remote add origin https://github.com/MorpheApp/morphe-patches.git
-git -C $target fetch --depth 1 origin e5464395441e916b643af4e2175c4e253e6df487
+git -C $target fetch --depth 1 origin 6cb8e6b6ee425eda8a854e026507286359f38a32
 if ($LASTEXITCODE) { throw 'Fetching pinned upstream failed' }
 git -C $target checkout --detach FETCH_HEAD
 if ($LASTEXITCODE) { throw 'Checking out pinned upstream failed' }
