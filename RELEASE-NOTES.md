@@ -1,22 +1,21 @@
-Makes ScrollPause a focused source with exactly two selectable patches:
+Updates both custom patches for **YouTube 21.30.216**, using the official Morphe Patches **2.0.0** base and its updated YouTube hooks. Custom player event observers now use the current Consumer callbacks.
 
-- **Pause on scroll or minimise**
-- **Smooth pinch zoom**
-
-Required settings, gestures, extension hooks, and normal non-root GmsCore/playback support are automatic hidden dependencies. Unrelated official patches are no longer selectable. Ad blocking, SponsorBlock, and the complete official feature set are not part of this focused bundle.
-
-The importable bundle is 8,208,688 bytes, about 29% smaller than 1.47.5 (11,539,653 bytes). 1,078 unused archive entries, including unrelated patch classes and Music/Reddit extension payloads, are removed. Complete reachable classes are retained conservatively, including class references in descriptors and reflection strings. The build checks the resulting archive with Morphe's patch loader, using no untrimmed main classes on its classpath, and requires exactly the two custom entries plus their 45 hidden dependency objects.
-
-The behaviour from 1.47.5 remains: immediate pause on confirmed held list scrolling with resize protections, pause on minimise, optional resume after scrolling **off by default**, continuous pinch zoom, brief zoom percentage, and bounded panning.
+Only **Pause on scroll or minimise** and **Smooth pinch zoom** are selectable. Required settings, gesture, GmsCore and playback dependencies remain automatic. Held-list scroll pausing with resize protections, pause on minimise, **default-off** scroll resume, continuous zoom, brief zoom percentage, and bounded panning remain included.
 
 ## Update
 
-Refresh your existing ScrollPause source to **1.47.6** and repatch an original supported **YouTube 21.20.405** APK. Select either or both custom patches. This bundle is intended for a normal non-root install using GmsCore; it automatically includes that support. Updating the source alone does not change the installed YouTube app.
+Use **Morphe Manager 2.3.0**, refresh your existing ScrollPause source to **2.0.1**, and repatch an original supported **YouTube 21.30.216** APK. This target requires Android 10 or newer. Older Manager 1.x versions do not provide the Patcher 2.x runtime used by this bundle. Updating the patch source alone does not change your installed YouTube app.
 
-Use this source as the selected patch bundle. Combining it with the full official bundle has not been validated and could duplicate shared hooks.
+Remote source: https://github.com/PulseRH/youtube-scrollpause-20261020
+
+This focused source targets normal non-root installation with GmsCore support. It does not include the complete official feature set, such as ad blocking or SponsorBlock. Combining it with the full official bundle remains unvalidated.
 
 ## Validation
 
-The full Android build, 73 standalone policy/geometry checks, five bytecode wrapper tests, and compact-bundle loading verification passed. Build: https://github.com/PulseRH/youtube-scrollpause-20261020/actions/runs/39484362481 . Real YouTube APK patching and phone gesture behaviour still require confirmation.
+The full Android build, 73 standalone policy/geometry checks, five bytecode-wrapper tests, and compacted-bundle loader verification passed. The final bundle is 10,908,034 bytes and contains two selectable entries with 52 hidden dependency objects.
 
-Unofficial derivative of Morphe Patches 1.47.0. Pinned upstream revision, complete source changes, reproducible build/test workflow, GPLv3 licence and Section 7 notices are included. No YouTube APK is included.
+Build: https://github.com/PulseRH/youtube-scrollpause-20261020/actions/runs/41216517148 . The loader check requires exactly two selectable custom patches and checks stable 21.30.216 compatibility declarations across their YouTube dependency graph, with untrimmed main outputs excluded.
+
+No original 21.30.216 APK or connected Android device was available. Successful compilation and metadata checks do not establish real APK patching or gesture behaviour. Please confirm held feed/comment scrolling, swipe-to-maximise, pinch/percentage/pan, minimise/PiP, and optional resume on your phone.
+
+Unofficial derivative of Morphe Patches 2.0.0, pinned to `6cb8e6b6ee425eda8a854e026507286359f38a32`. Complete custom source, reproducible workflow, GPLv3 licence and Section 7 notices included. No YouTube APK is included.
