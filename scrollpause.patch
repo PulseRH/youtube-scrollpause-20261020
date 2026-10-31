@@ -344,10 +344,10 @@ index 0000000..f7b0526
 +      f'{old_size:,} -> {bundle.stat().st_size:,} bytes before Android dexing')
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java
 new file mode 100644
-index 0000000..efe9e9b
+index 0000000..9005b22
 --- /dev/null
 +++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/AutoPausePatch.java
-@@ -0,0 +1,340 @@
+@@ -0,0 +1,337 @@
 +package app.morphe.extension.youtube.patches;
 +
 +import android.app.Activity;
@@ -372,7 +372,6 @@ index 0000000..efe9e9b
 +import app.morphe.extension.youtube.shared.PlayerType;
 +import app.morphe.extension.youtube.shared.ShortsPlayerState;
 +import app.morphe.extension.youtube.shared.VideoState;
-+import kotlin.Unit;
 +
 +/** Custom addition, 2026-10-20. See the upstream LICENSE and NOTICE. */
 +@SuppressWarnings("unused")
@@ -663,7 +662,6 @@ index 0000000..efe9e9b
 +                    minimisePolicy.cancel();
 +                }
 +            });
-+            return Unit.INSTANCE;
 +        });
 +
 +        VideoState.getOnChange().addObserver(state -> {
@@ -684,7 +682,6 @@ index 0000000..efe9e9b
 +                    issuePause(minimisePolicy);
 +                }
 +            });
-+            return Unit.INSTANCE;
 +        });
 +    }
 +}
@@ -870,10 +867,10 @@ index 0000000..f59396d
 +}
 diff --git a/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPatch.java b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPatch.java
 new file mode 100644
-index 0000000..ea7c3f0
+index 0000000..7fa2dd0
 --- /dev/null
 +++ b/extensions/youtube/src/main/java/app/morphe/extension/youtube/patches/SmoothZoomPatch.java
-@@ -0,0 +1,335 @@
+@@ -0,0 +1,333 @@
 +package app.morphe.extension.youtube.patches;
 +
 +import android.graphics.Rect;
@@ -900,7 +897,6 @@ index 0000000..ea7c3f0
 +import app.morphe.extension.youtube.settings.Settings;
 +import app.morphe.extension.youtube.shared.PlayerType;
 +import app.morphe.extension.youtube.shared.ShortsPlayerState;
-+import kotlin.Unit;
 +
 +/** Custom addition, 2026-10-20. See upstream LICENSE and NOTICE. */
 +@SuppressWarnings("unused")
@@ -945,8 +941,7 @@ index 0000000..ea7c3f0
 +                Utils.runOnMainThreadNowOrLater(() -> {
 +                    if (!fullscreen()) reset();
 +                });
-+                return Unit.INSTANCE;
-+            });
++                });
 +        }
 +        if (view != null && view != playerRef.get()) {
 +            reset();
@@ -5424,10 +5419,10 @@ index d735796..519ec5a 100644
  </resources>
 diff --git a/patches/src/test/kotlin/app/morphe/patches/scrollpause/bundle/VerifyCustomBundle.kt b/patches/src/test/kotlin/app/morphe/patches/scrollpause/bundle/VerifyCustomBundle.kt
 new file mode 100644
-index 0000000..b5f8304
+index 0000000..d092b82
 --- /dev/null
 +++ b/patches/src/test/kotlin/app/morphe/patches/scrollpause/bundle/VerifyCustomBundle.kt
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,38 @@
 +package app.morphe.patches.scrollpause.bundle
 +
 +import app.morphe.patcher.patch.Patch
@@ -5448,6 +5443,14 @@ index 0000000..b5f8304
 +        patch.dependencies.forEach(::visit)
 +    }
 +    patches.forEach(::visit)
++    visited.forEach { patch ->
++        val youtube = patch.compatibility?.filter { it.packageName == "com.google.android.youtube" }
++        youtube?.forEach { compatibility ->
++            check(compatibility.targets.any { it.version == "21.30.216" && !it.isExperimental }) {
++                "Dependency does not declare stable YouTube 21.30.216 compatibility: $patch"
++            }
++        }
++    }
 +    check(visited.size > 2) { "Required dependencies missing" }
 +    check(visited.filter { it !in patches }.all { it.name == null })
 +    ZipFile(archive).use { zip ->
@@ -5456,7 +5459,7 @@ index 0000000..b5f8304
 +        check(zip.getEntry("extensions/music.mpe") == null)
 +        check(zip.getEntry("extensions/reddit.mpe") == null)
 +    }
-+    println("Verified exactly two selectable patches and ${visited.size - 2} hidden dependency objects")
++    println("Verified exactly two selectable patches and ${visited.size - 2} hidden dependency objects; stable YouTube 21.30.216 metadata verified")
 +}
 diff --git a/patches/src/test/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomCallbackTest.kt b/patches/src/test/kotlin/app/morphe/patches/youtube/layout/player/fullscreen/SmoothZoomCallbackTest.kt
 new file mode 100644
